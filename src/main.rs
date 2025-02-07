@@ -98,7 +98,9 @@ fn main() {
                 enemy_attack,
                 update_attack_timer_bar,
                 update_card_timer_bars,
+                update_enemy_skill_timer_bars,
                 card_auto_attack,
+                enemy_skill_auto_attack,
                 check_enemy_death,
                 // handle_inventory_button,
             )
@@ -144,7 +146,109 @@ fn spawn_new_enemy(
                 Class::Warrior,
                 EnemyAttackTimer(Timer::from_seconds(2.0, TimerMode::Repeating)),
             ));
+
+            // Spawn the timer bar background
+            parent.spawn((
+                Sprite {
+                    color: Color::srgb(0.3, 0.3, 0.3),
+                    custom_size: Some(Vec2::new(50.0, 5.0)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, -40.0, 0.1),
+            ));
+
+            // Spawn the timer bar fill
+            parent.spawn((
+                Sprite {
+                    color: RED,
+                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                    ..default()
+                },
+                Transform::from_xyz(-25.0, -40.0, 0.2),
+                AttackTimerBar,
+            ));
         });
+
+    let enemyskills = [
+        Card {
+            sprite: Sprite {
+                image: asset_server.load("player.png"),
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            selectable_card: SelectableCard(false),
+            id: 1,
+            description: "Fireball".to_string(),
+        },
+        Card {
+            sprite: Sprite {
+                image: asset_server.load("player.png"),
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            selectable_card: SelectableCard(false),
+            id: 2,
+            description: "Ice Blast".to_string(),
+        },
+        Card {
+            sprite: Sprite {
+                image: asset_server.load("player.png"),
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            selectable_card: SelectableCard(false),
+            id: 3,
+            description: "Lightning Strike".to_string(),
+        },
+    ];
+
+    // Spawn enemy skills
+    let enemy_skills_y = game_config.screen_height / 2.0 - sprite_size.y * 2.0; // Position below enemy
+    let starting_x = 0.0 - (enemyskills.len() / 2) as f32 * (sprite_size.x * 0.7);
+    let mut current_x = starting_x;
+
+    for (i, card) in enemyskills.iter().enumerate() {
+        let skill_entity = commands
+            .spawn((
+                card.sprite.clone(),
+                card.selectable_card.clone(),
+                Transform::from_xyz(current_x, enemy_skills_y, 0.0).with_scale(Vec3::splat(1.0)),
+                EnemyCard,
+                Damage(15),
+                CardAttackTimer(Timer::from_seconds(4.0, TimerMode::Repeating)),
+            ))
+            .id();
+
+        commands.entity(skill_entity).with_children(|parent| {
+            parent.spawn((
+                Text2d::new(&card.description),
+                Transform::from_xyz(0.0, -30.0, 0.1),
+            ));
+
+            // Background bar
+            parent.spawn((
+                Sprite {
+                    color: Color::srgb(0.3, 0.3, 0.3),
+                    custom_size: Some(Vec2::new(50.0, 5.0)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, -20.0, 0.1),
+            ));
+
+            // Timer fill bar
+            parent.spawn((
+                Sprite {
+                    color: RED,
+                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                    ..default()
+                },
+                Transform::from_xyz(-25.0, -20.0, 0.2),
+                CardTimerBar,
+            ));
+        });
+
+        current_x += sprite_size.x * 0.7;
+    }
 }
 
 fn update_health(
@@ -298,30 +402,42 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                     intelligence: 10,
                 },
                 Class::Warrior,
-                EnemyAttackTimer(Timer::from_seconds(2.0, TimerMode::Repeating)),
-            ));
-
-            // Spawn the timer bar background
-            parent.spawn((
-                Sprite {
-                    color: Color::srgb(0.3, 0.3, 0.3),
-                    custom_size: Some(Vec2::new(50.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, -40.0, 0.1),
-            ));
-
-            // Spawn the timer bar fill
-            parent.spawn((
-                Sprite {
-                    color: RED,
-                    custom_size: Some(Vec2::new(50.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(-25.0, -40.0, 0.2),
-                AttackTimerBar,
             ));
         });
+
+    let enemyskills = [
+        Card {
+            sprite: Sprite {
+                image: asset_server.load("player.png"),
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            selectable_card: SelectableCard(false),
+            id: 1,
+            description: "Fireball".to_string(),
+        },
+        Card {
+            sprite: Sprite {
+                image: asset_server.load("player.png"),
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            selectable_card: SelectableCard(false),
+            id: 2,
+            description: "Ice Blast".to_string(),
+        },
+        Card {
+            sprite: Sprite {
+                image: asset_server.load("player.png"),
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            selectable_card: SelectableCard(false),
+            id: 3,
+            description: "Lightning Strike".to_string(),
+        },
+    ];
+
     commands
         .spawn((
             Sprite {
@@ -347,23 +463,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                 Class::Warrior,
             ));
         });
-
-    commands
-        .spawn((
-            Sprite {
-                image: asset_server.load("card-back.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            Transform::from_xyz(
-                screen_width / 2.0 - sprite_size.x / 2.0,
-                -screen_height / 2.0 + sprite_size.y / 2.0,
-                0.1,
-            )
-            .with_scale(Vec3::splat(1.0)),
-            DeckPile,
-        ))
-        .observe(draw_card_on::<Pointer<Click>>());
 
     // Spawn inventory button
     commands
@@ -447,7 +546,7 @@ fn animate_sprite(
 fn select_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
     Trigger<E>,
     (
-        Query<(&mut Sprite, &mut SelectableCard, &Damage)>,
+        Query<(&mut SelectableCard, &Damage), Changed<Interaction>>,
         Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
         Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
         Query<(Entity, &mut Transform), With<PlayerCard>>,
@@ -455,7 +554,7 @@ fn select_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
     ),
 ) {
     move |ev, (mut sprites, mut enemy_query, mut player_query, mut player_cards, mut commands)| {
-        let Ok((mut sprite, mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
+        let Ok((mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
             println!("No selectable card found");
             return;
         };
@@ -501,38 +600,35 @@ fn select_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
 
 fn hover_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
     Trigger<E>,
-    (
-        Query<(&mut Sprite, &mut Transform, &mut SelectableCard, &Damage)>,
-        // Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
-        // Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
-    ),
+    (Query<(&Interaction, &mut Transform, &mut SelectableCard, &Damage), Changed<Interaction>>,),
 ) {
     move |ev, (mut sprites)| {
-        let Ok((mut sprite, mut transform, mut selectable_card, damage)) =
+        let Ok((interaction, mut transform, mut selectable_card, damage)) =
             sprites.0.get_mut(ev.entity())
         else {
             println!("No selectable card found");
             return;
         };
-        transform.translation.y += 10.0;
+        if matches!(interaction, Interaction::Hovered) {
+            transform.translation.y += 10.0;
+        }
     }
 }
+
 fn hover_card_out<E: Debug + Clone + Reflect>() -> impl Fn(
     Trigger<E>,
-    (
-        Query<(&mut Sprite, &mut Transform, &mut SelectableCard, &Damage)>,
-        // Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
-        // Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
-    ),
+    (Query<(&Interaction, &mut Transform, &mut SelectableCard, &Damage), Changed<Interaction>>,),
 ) {
     move |ev, (mut sprites)| {
-        let Ok((mut sprite, mut transform, mut selectable_card, damage)) =
+        let Ok((interaction, mut transform, mut selectable_card, damage)) =
             sprites.0.get_mut(ev.entity())
         else {
             println!("No selectable card found");
             return;
         };
-        transform.translation.y -= 10.0;
+        if matches!(interaction, Interaction::None) {
+            transform.translation.y -= 10.0;
+        }
     }
 }
 
@@ -698,10 +794,12 @@ fn update_attack_timer_bar(
 struct CardTimerBar;
 
 fn update_card_timer_bars(
-    card_query: Query<(&CardAttackTimer, &Children), With<PlayerCard>>,
+    time: Res<Time>,
+    mut card_query: Query<(&mut CardAttackTimer, &Children)>,
     mut timer_bar_query: Query<(&mut Transform, &mut Sprite), With<CardTimerBar>>,
 ) {
-    for (timer, children) in card_query.iter() {
+    for (mut timer, children) in card_query.iter_mut() {
+        timer.tick(time.delta());
         for &child in children.iter() {
             if let Ok((mut transform, mut sprite)) = timer_bar_query.get_mut(child) {
                 let progress = timer.elapsed_secs() / timer.duration().as_secs_f32();
@@ -930,5 +1028,59 @@ fn handle_loot_all<E: Debug + Clone + Reflect>() -> impl Fn(
         }
 
         next_state.set(GameState::Battle);
+    }
+}
+
+fn enemy_skill_auto_attack(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut skill_query: Query<(Entity, &mut CardAttackTimer, &Damage), With<EnemyCard>>,
+    mut player_query: Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
+    enemy_query: Query<&Stats, With<EnemyHealth>>,
+) {
+    let Ok(enemy_stats) = enemy_query.get_single() else {
+        return;
+    };
+
+    let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
+        return;
+    };
+
+    for (skill_entity, mut timer, damage) in skill_query.iter_mut() {
+        timer.tick(time.delta());
+
+        if timer.just_finished() {
+            let damage = calculate_enemy_damage(enemy_stats, player_stats);
+            player_health.0 = player_health.0.saturating_sub(damage);
+            println!(
+                "Enemy skill auto-attacks for {} damage! Player health: {}",
+                damage, player_health.0
+            );
+        }
+    }
+}
+
+fn update_enemy_skill_timer_bars(
+    card_query: Query<(&CardAttackTimer, &Children), With<EnemyCard>>,
+    mut timer_bar_query: Query<(&mut Transform, &mut Sprite), With<CardTimerBar>>,
+) {
+    for (timer, children) in card_query.iter() {
+        for &child in children.iter() {
+            if let Ok((mut transform, mut sprite)) = timer_bar_query.get_mut(child) {
+                let progress = timer.elapsed_secs() / timer.duration().as_secs_f32();
+                let bar_width = 50.0;
+
+                sprite.custom_size = Some(Vec2::new(bar_width * progress, 5.0));
+                transform.translation.x = -25.0 + (bar_width * progress / 2.0);
+
+                sprite.color = if progress < 0.3 {
+                    RED
+                } else if progress < 0.6 {
+                    YELLOW
+                } else {
+                    GREEN
+                };
+            }
+        }
     }
 }
