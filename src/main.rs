@@ -72,43 +72,10 @@ struct InventoryDisplay;
 #[derive(Component)]
 struct LootAllButton;
 
-fn main() {
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(ImagePlugin::default_nearest())
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Bee Game".to_string(),
-                        resolution: WindowResolution::new(640.0, 480.0),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-        )
-        .init_state::<GameState>()
-        .init_resource::<Inventory>()
-        .add_systems(Startup, (setup))
-        .add_systems(
-            Update,
-            (
-                update_health,
-                update_skill_timer_bars,
-                enemy_auto_attack,
-                player_auto_attack,
-                enemy_skill_auto_attack,
-                check_enemy_death,
-                // handle_inventory_button,
-            )
-                .run_if(in_state(GameState::Battle)),
-        )
-        // .add_systems(OnEnter(GameState::Battle), (spawn_new_enemy))
-        .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
-        .insert_resource(GameConfig {
-            screen_width: 640.0,
-            screen_height: 480.0,
-        })
-        .run();
+fn debug_display_state(state: Res<State<GameState>>, input: Res<ButtonInput<KeyCode>>) {
+    if input.just_pressed(KeyCode::Escape) {
+        println!("Current state: {:?}", state.get());
+    }
 }
 
 fn spawn_new_enemy(
@@ -406,13 +373,10 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
         .with_children(|parent| {
             parent.spawn((Text2d::new("I"), Transform::from_xyz(0.0, 0.0, 0.1)));
         })
-        .observe(change_sprite_color::<Pointer<Over>>(Color::srgb(
-            0.0, 0.0, 0.0,
-        )))
         .observe(change_sprite_color::<Pointer<Out>>(Color::srgb(
             0.0, 0.7, 0.5,
         )))
-        .observe(handle_inventory_button::<Pointer<Over>>());
+        .observe(handle_inventory_button::<Pointer<Click>>());
 }
 
 fn change_sprite_color<E: Debug + Clone + Reflect>(
@@ -707,6 +671,15 @@ fn check_enemy_death(
     }
 }
 
+#[derive(Component)]
+struct LootScreen;
+
+fn despawn_loot_screen(mut commands: Commands, loot_screen_query: Query<Entity, With<LootScreen>>) {
+    if let Ok(loot_screen) = loot_screen_query.get_single() {
+        commands.entity(loot_screen).despawn_recursive();
+    }
+}
+
 fn spawn_loot_screen(mut commands: Commands, game_config: Res<GameConfig>) {
     let loot_items = vec![
         LootItem {
@@ -733,6 +706,7 @@ fn spawn_loot_screen(mut commands: Commands, game_config: Res<GameConfig>) {
             )),
             ..default()
         },
+        LootScreen,
         Transform::from_xyz(0.0, 0.0, 0.9),
     ));
 
@@ -785,32 +759,19 @@ fn spawn_loot_screen(mut commands: Commands, game_config: Res<GameConfig>) {
 fn handle_inventory_button<E: Debug + Clone + Reflect>() -> impl Fn(
     Trigger<E>,
     (
-        Query<(&Interaction, &Transform), (Changed<Interaction>, With<InventoryButton>)>,
-        Query<Entity, With<InventoryDisplay>>,
+        Query<(&Transform), With<InventoryDisplay>>,
         Res<Inventory>,
         Commands,
     ),
 ) {
-    move |ev, (button_query, inventory_display_query, inventory, mut commands)| {
-        let Ok((interaction, button_transform)) = button_query.get_single() else {
+    println!("handle_inventory_button triggered");
+    // display inventory
+    move |ev, (inventory_display_query, inventory, mut commands)| {
+        let Ok(transform) = inventory_display_query.get_single() else {
+            println!("[handle_inventory_button] No inventory display found");
             return;
         };
-
-        match *interaction {
-            Interaction::Hovered => {
-                // Only spawn if not already displayed
-                if inventory_display_query.is_empty() {
-                    spawn_inventory_display(&mut commands, button_transform, &inventory);
-                }
-            }
-            Interaction::None => {
-                // Remove inventory display when not hovering
-                for entity in inventory_display_query.iter() {
-                    commands.entity(entity).despawn_recursive();
-                }
-            }
-            _ => {}
-        }
+        spawn_inventory_display(&mut commands, &transform, &inventory);
     }
 }
 
@@ -930,4 +891,45 @@ fn update_skill_timer_bars(
             }
         }
     }
+}
+
+fn main() {
+    App::new()
+        .add_plugins(
+            DefaultPlugins
+                .set(ImagePlugin::default_nearest())
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Bee Game".to_string(),
+                        resolution: WindowResolution::new(640.0, 480.0),
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
+        .init_state::<GameState>()
+        .init_resource::<Inventory>()
+        .add_systems(Startup, (setup))
+        .add_systems(
+            Update,
+            (
+                update_health,
+                update_skill_timer_bars,
+                enemy_auto_attack,
+                player_auto_attack,
+                enemy_skill_auto_attack,
+                check_enemy_death,
+                // handle_inventory_button,
+            )
+                .run_if(in_state(GameState::Battle)),
+        )
+        .add_systems(Update, debug_display_state)
+        // .add_systems(OnEnter(GameState::Battle), (spawn_new_enemy))
+        .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
+        .add_systems(OnExit(GameState::LootScreen), despawn_loot_screen)
+        .insert_resource(GameConfig {
+            screen_width: 640.0,
+            screen_height: 480.0,
+        })
+        .run();
 }
