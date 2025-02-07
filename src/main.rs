@@ -72,6 +72,9 @@ struct InventoryDisplay;
 #[derive(Component)]
 struct LootAllButton;
 
+#[derive(Component)]
+struct EnemyAttackTimer(Timer);
+
 fn main() {
     App::new()
         .add_plugins(
@@ -92,10 +95,9 @@ fn main() {
         .add_systems(
             Update,
             (
-                move_sprite,
-                animate_sprite,
                 update_health,
                 enemy_attack,
+                player_attack,
                 update_attack_timer_bar,
                 update_card_timer_bars,
                 update_enemy_skill_timer_bars,
@@ -144,7 +146,7 @@ fn spawn_new_enemy(
                     intelligence: 10,
                 },
                 Class::Warrior,
-                EnemyAttackTimer(Timer::from_seconds(2.0, TimerMode::Repeating)),
+                EnemyAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             ));
 
             // Spawn the timer bar background
@@ -263,21 +265,6 @@ fn update_health(
     }
 }
 
-fn move_sprite(
-    time: Res<Time>,
-    mut sprite: Query<&mut Transform, (Without<Sprite>, With<Children>)>,
-) {
-    let t = time.elapsed_secs() * 0.1;
-    for mut transform in &mut sprite {
-        let new = Vec2 {
-            x: 50.0 * ops::sin(t),
-            y: 50.0 * ops::sin(t * 2.0),
-        };
-        transform.translation.x = new.x;
-        transform.translation.y = new.y;
-    }
-}
-
 #[derive(Component, Clone)]
 struct SelectableCard(bool);
 
@@ -287,6 +274,7 @@ struct PlayerCard;
 #[derive(Component, Clone)]
 struct EnemyCard;
 #[derive(Component, Clone)]
+
 struct Card {
     sprite: Sprite,
     selectable_card: SelectableCard,
@@ -402,41 +390,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                     intelligence: 10,
                 },
                 Class::Warrior,
+                EnemyAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             ));
         });
-
-    let enemyskills = [
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 1,
-            description: "Fireball".to_string(),
-        },
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 2,
-            description: "Ice Blast".to_string(),
-        },
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 3,
-            description: "Lightning Strike".to_string(),
-        },
-    ];
 
     commands
         .spawn((
@@ -468,7 +424,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
     commands
         .spawn((
             Sprite {
-                color: Color::rgb(0.3, 0.3, 0.3),
+                color: Color::srgb(0.3, 0.3, 0.3),
                 custom_size: Some(Vec2::new(40.0, 40.0)),
                 ..default()
             },
@@ -517,36 +473,12 @@ struct AnimationIndices {
 struct AnimationTimer(Timer);
 
 #[derive(Component, Deref, DerefMut)]
-struct EnemyAttackTimer(Timer);
-
-#[derive(Component, Deref, DerefMut)]
 struct CardAttackTimer(Timer);
-
-fn animate_sprite(
-    time: Res<Time>,
-    mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut Sprite)>,
-) {
-    for (indices, mut timer, mut sprite) in &mut query {
-        let Some(texture_atlas) = &mut sprite.texture_atlas else {
-            continue;
-        };
-
-        timer.tick(time.delta());
-
-        if timer.just_finished() {
-            texture_atlas.index = if texture_atlas.index == indices.last {
-                indices.first
-            } else {
-                texture_atlas.index + 1
-            };
-        }
-    }
-}
 
 fn select_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
     Trigger<E>,
     (
-        Query<(&mut SelectableCard, &Damage), Changed<Interaction>>,
+        Query<(&mut SelectableCard, &Damage)>,
         Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
         Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
         Query<(Entity, &mut Transform), With<PlayerCard>>,
@@ -598,37 +530,25 @@ fn select_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
     }
 }
 
-fn hover_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
-    Trigger<E>,
-    (Query<(&Interaction, &mut Transform, &mut SelectableCard, &Damage), Changed<Interaction>>,),
-) {
+fn hover_card_on<E: Debug + Clone + Reflect>(
+) -> impl Fn(Trigger<E>, Query<(&mut Transform, &mut SelectableCard, &Damage)>) {
     move |ev, (mut sprites)| {
-        let Ok((interaction, mut transform, mut selectable_card, damage)) =
-            sprites.0.get_mut(ev.entity())
-        else {
+        let Ok((mut transform, mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
             println!("No selectable card found");
             return;
         };
-        if matches!(interaction, Interaction::Hovered) {
-            transform.translation.y += 10.0;
-        }
+        transform.translation.y += 10.0;
     }
 }
 
-fn hover_card_out<E: Debug + Clone + Reflect>() -> impl Fn(
-    Trigger<E>,
-    (Query<(&Interaction, &mut Transform, &mut SelectableCard, &Damage), Changed<Interaction>>,),
-) {
+fn hover_card_out<E: Debug + Clone + Reflect>(
+) -> impl Fn(Trigger<E>, Query<(&mut Transform, &mut SelectableCard, &Damage)>) {
     move |ev, (mut sprites)| {
-        let Ok((interaction, mut transform, mut selectable_card, damage)) =
-            sprites.0.get_mut(ev.entity())
-        else {
+        let Ok((mut transform, mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
             println!("No selectable card found");
             return;
         };
-        if matches!(interaction, Interaction::None) {
-            transform.translation.y -= 10.0;
-        }
+        transform.translation.y -= 10.0;
     }
 }
 
@@ -726,23 +646,44 @@ fn draw_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
 
 fn enemy_attack(
     time: Res<Time>,
-    mut enemy_query: Query<(&mut EnemyAttackTimer, &Stats), With<EnemyHealth>>,
-    mut player_query: Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
+    mut enemy_query: Query<(&Stats, &mut EnemyAttackTimer), With<EnemyHealth>>,
+    mut player_query: Query<(&mut PlayerHealth, &Stats)>,
 ) {
-    for (mut attack_timer, enemy_stats) in enemy_query.iter_mut() {
-        attack_timer.tick(time.delta());
+    let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
+        return;
+    };
+    let Ok((enemy_stats, mut timer)) = enemy_query.get_single_mut() else {
+        return;
+    };
 
-        if attack_timer.just_finished() {
-            if let Ok((mut player_health, player_stats)) = player_query.get_single_mut() {
-                let damage = calculate_enemy_damage(enemy_stats, player_stats);
-                player_health.0 = player_health.0.saturating_sub(damage);
-                println!(
-                    "Enemy attacks for {} damage! Player health: {}",
-                    damage, player_health.0
-                );
-            }
-        }
+    timer.0.tick(time.delta());
+    if timer.0.just_finished() {
+        let damage = calculate_enemy_damage(enemy_stats, player_stats);
+        player_health.0 = player_health.0.saturating_sub(damage);
+        println!(
+            "Enemy attacks for {} damage! Player health: {}",
+            damage, player_health.0
+        );
     }
+}
+
+fn player_attack(
+    time: Res<Time>,
+    player_query: Query<&Stats, With<PlayerHealth>>,
+    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
+) {
+    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
+        return;
+    };
+    let Ok(player_stats) = player_query.get_single() else {
+        return;
+    };
+    let damage = calculate_player_damage(player_stats, enemy_stats);
+    enemy_health.0 = enemy_health.0.saturating_sub(damage);
+    println!(
+        "Player attacks for {} damage! Enemy health: {}",
+        damage, enemy_health.0
+    );
 }
 
 fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
@@ -760,6 +701,21 @@ fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
     total_damage
 }
 
+fn calculate_player_damage(player_stats: &Stats, enemy_stats: &Stats) -> usize {
+    let player_strength = player_stats.strength;
+    let enemy_agility = enemy_stats.agility;
+
+    let dodge_chance: f32 = (enemy_stats.agility as f32 / player_stats.agility as f32) * 0.5;
+    if rand::random::<f32>() < dodge_chance {
+        println!("Enemy dodged the attack!");
+        return 0;
+    }
+
+    let base_damage = 5; // Base damage for player attacks
+    let total_damage = base_damage * player_strength / enemy_agility;
+    total_damage
+}
+
 #[derive(Component)]
 struct AttackTimerBar;
 
@@ -769,7 +725,7 @@ fn update_attack_timer_bar(
 ) {
     if let Ok(timer) = enemy_query.get_single() {
         if let Ok((mut transform, mut sprite)) = timer_bar_query.get_single_mut() {
-            let progress = timer.elapsed_secs() / timer.duration().as_secs_f32();
+            let progress = timer.0.elapsed().as_secs_f32() / timer.0.duration().as_secs_f32();
             let bar_width = 50.0;
 
             // Update the width of the fill bar
