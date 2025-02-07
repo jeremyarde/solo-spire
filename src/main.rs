@@ -72,9 +72,6 @@ struct InventoryDisplay;
 #[derive(Component)]
 struct LootAllButton;
 
-#[derive(Component)]
-struct EnemyAttackTimer(Timer);
-
 fn main() {
     App::new()
         .add_plugins(
@@ -96,19 +93,16 @@ fn main() {
             Update,
             (
                 update_health,
-                enemy_attack,
-                player_attack,
-                update_attack_timer_bar,
-                update_card_timer_bars,
-                update_enemy_skill_timer_bars,
-                card_auto_attack,
+                update_skill_timer_bars,
+                enemy_auto_attack,
+                player_auto_attack,
                 enemy_skill_auto_attack,
                 check_enemy_death,
                 // handle_inventory_button,
             )
                 .run_if(in_state(GameState::Battle)),
         )
-        .add_systems(OnEnter(GameState::Battle), (spawn_new_enemy))
+        // .add_systems(OnEnter(GameState::Battle), (spawn_new_enemy))
         .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
         .insert_resource(GameConfig {
             screen_width: 640.0,
@@ -118,9 +112,9 @@ fn main() {
 }
 
 fn spawn_new_enemy(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    game_config: Res<GameConfig>,
+    commands: &mut Commands,
+    asset_server: &Res<AssetServer>,
+    game_config: &Res<GameConfig>,
 ) {
     let sprite_size = Vec2::splat(128.0 / 2.0);
     commands
@@ -146,7 +140,6 @@ fn spawn_new_enemy(
                     intelligence: 10,
                 },
                 Class::Warrior,
-                EnemyAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             ));
 
             // Spawn the timer bar background
@@ -167,7 +160,6 @@ fn spawn_new_enemy(
                     ..default()
                 },
                 Transform::from_xyz(-25.0, -40.0, 0.2),
-                AttackTimerBar,
             ));
         });
 
@@ -366,33 +358,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
 
         current_x += sprite_size.x * 0.7;
     }
-
-    commands
-        .spawn((
-            Sprite {
-                image: asset_server.load("boss_bee.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            Transform::from_xyz(0.0, screen_height / 2.0 + -sprite_size.y, 0.1)
-                .with_scale(Vec3::splat(1.0)),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                EnemyHealth(20),
-                Text2d::new("Enemy"),
-                Transform::from_xyz(0.0, -30.0, 0.1).with_scale(Vec3::splat(1.0)),
-                Stats {
-                    strength: 10,
-                    agility: 10,
-                    stamina: 10,
-                    perception: 10,
-                    intelligence: 10,
-                },
-                Class::Warrior,
-                EnemyAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
-            ));
-        });
+    {
+        spawn_new_enemy(&mut commands, &asset_server, &game_config);
+    }
 
     commands
         .spawn((
@@ -463,14 +431,6 @@ struct EnemyHealth(usize);
 
 #[derive(Component)]
 struct PlayerHealth(usize);
-#[derive(Component)]
-struct AnimationIndices {
-    first: usize,
-    last: usize,
-}
-
-#[derive(Component, Deref, DerefMut)]
-struct AnimationTimer(Timer);
 
 #[derive(Component, Deref, DerefMut)]
 struct CardAttackTimer(Timer);
@@ -644,48 +604,6 @@ fn draw_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
     }
 }
 
-fn enemy_attack(
-    time: Res<Time>,
-    mut enemy_query: Query<(&Stats, &mut EnemyAttackTimer), With<EnemyHealth>>,
-    mut player_query: Query<(&mut PlayerHealth, &Stats)>,
-) {
-    let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
-        return;
-    };
-    let Ok((enemy_stats, mut timer)) = enemy_query.get_single_mut() else {
-        return;
-    };
-
-    timer.0.tick(time.delta());
-    if timer.0.just_finished() {
-        let damage = calculate_enemy_damage(enemy_stats, player_stats);
-        player_health.0 = player_health.0.saturating_sub(damage);
-        println!(
-            "Enemy attacks for {} damage! Player health: {}",
-            damage, player_health.0
-        );
-    }
-}
-
-fn player_attack(
-    time: Res<Time>,
-    player_query: Query<&Stats, With<PlayerHealth>>,
-    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
-) {
-    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
-        return;
-    };
-    let Ok(player_stats) = player_query.get_single() else {
-        return;
-    };
-    let damage = calculate_player_damage(player_stats, enemy_stats);
-    enemy_health.0 = enemy_health.0.saturating_sub(damage);
-    println!(
-        "Player attacks for {} damage! Enemy health: {}",
-        damage, enemy_health.0
-    );
-}
-
 fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
     let enemy_strength = enemy_stats.strength;
     let player_agility = player_stats.agility;
@@ -717,88 +635,61 @@ fn calculate_player_damage(player_stats: &Stats, enemy_stats: &Stats) -> usize {
 }
 
 #[derive(Component)]
-struct AttackTimerBar;
-
-fn update_attack_timer_bar(
-    enemy_query: Query<&EnemyAttackTimer>,
-    mut timer_bar_query: Query<(&mut Transform, &mut Sprite), With<AttackTimerBar>>,
-) {
-    if let Ok(timer) = enemy_query.get_single() {
-        if let Ok((mut transform, mut sprite)) = timer_bar_query.get_single_mut() {
-            let progress = timer.0.elapsed().as_secs_f32() / timer.0.duration().as_secs_f32();
-            let bar_width = 50.0;
-
-            // Update the width of the fill bar
-            sprite.custom_size = Some(Vec2::new(bar_width * progress, 5.0));
-
-            // Update the position to anchor from the left
-            transform.translation.x = -25.0 + (bar_width * progress / 2.0);
-
-            // Update color based on progress
-            sprite.color = if progress < 0.3 {
-                RED
-            } else if progress < 0.6 {
-                YELLOW
-            } else {
-                GREEN
-            };
-        }
-    }
-}
-
-#[derive(Component)]
 struct CardTimerBar;
 
-fn update_card_timer_bars(
+fn enemy_auto_attack(
     time: Res<Time>,
-    mut card_query: Query<(&mut CardAttackTimer, &Children)>,
-    mut timer_bar_query: Query<(&mut Transform, &mut Sprite), With<CardTimerBar>>,
+    mut enemy_cards_query: Query<(&mut CardAttackTimer), With<EnemyCard>>,
+    mut player_query: Query<(&mut PlayerHealth, &Stats)>,
+    mut enemy_query: Query<(&mut EnemyHealth, &Stats)>,
 ) {
-    for (mut timer, children) in card_query.iter_mut() {
-        timer.tick(time.delta());
-        for &child in children.iter() {
-            if let Ok((mut transform, mut sprite)) = timer_bar_query.get_mut(child) {
-                let progress = timer.elapsed_secs() / timer.duration().as_secs_f32();
-                let bar_width = 50.0;
+    let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
+        println!("[enemy_auto_attack] No player found");
+        return;
+    };
+    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
+        println!("[enemy_auto_attack] No enemy found");
+        return;
+    };
 
-                sprite.custom_size = Some(Vec2::new(bar_width * progress, 5.0));
-                transform.translation.x = -25.0 + (bar_width * progress / 2.0);
-
-                sprite.color = if progress < 0.3 {
-                    RED
-                } else if progress < 0.6 {
-                    YELLOW
-                } else {
-                    GREEN
-                };
-            }
+    for (mut timer) in enemy_cards_query.iter_mut() {
+        // println!("enemy_auto_attack: timer: {:?}", timer.0.elapsed_secs());
+        timer.0.tick(time.delta());
+        if timer.0.finished() {
+            println!("attack ready");
+            let damage = calculate_enemy_damage(enemy_stats, player_stats);
+            player_health.0 = player_health.0.saturating_sub(damage);
+            println!(
+                "Enemy auto-attacks for {} damage! Player health: {}",
+                damage, player_health.0
+            );
         }
     }
 }
 
-fn card_auto_attack(
+fn player_auto_attack(
     time: Res<Time>,
-    mut commands: Commands,
-    mut card_query: Query<(Entity, &mut CardAttackTimer, &Damage), With<PlayerCard>>,
-    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
-    player_query: Query<&Stats, With<PlayerHealth>>,
+    mut player_cards_query: Query<(&mut CardAttackTimer), With<PlayerCard>>,
+    mut enemy_query: Query<(&mut EnemyHealth, &Stats)>,
+    mut player_stats_query: Query<&Stats, With<PlayerHealth>>,
 ) {
-    let Ok(player_stats) = player_query.get_single() else {
-        return;
-    };
-
     let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
+        println!("[player_auto_attack] No enemy found");
+        return;
+    };
+    let Ok(player_stats) = player_stats_query.get_single() else {
+        println!("[player_auto_attack] No player stats found");
         return;
     };
 
-    for (card_entity, mut timer, damage) in card_query.iter_mut() {
-        timer.tick(time.delta());
-
-        if timer.just_finished() {
-            let damage = calculate_damage(player_stats, enemy_stats, damage.0);
+    for (mut timer) in player_cards_query.iter_mut() {
+        timer.0.tick(time.delta());
+        // println!("player_auto_attack: timer: {:?}", timer.0.elapsed_secs());
+        if timer.0.finished() {
+            let damage = calculate_player_damage(player_stats, enemy_stats);
             enemy_health.0 = enemy_health.0.saturating_sub(damage);
             println!(
-                "Card auto-attacks for {} damage! Enemy health: {}",
+                "Player auto-attacks for {} damage! Enemy health: {}",
                 damage, enemy_health.0
             );
         }
@@ -1016,14 +907,14 @@ fn enemy_skill_auto_attack(
     }
 }
 
-fn update_enemy_skill_timer_bars(
-    card_query: Query<(&CardAttackTimer, &Children), With<EnemyCard>>,
+fn update_skill_timer_bars(
+    card_query: Query<(&CardAttackTimer, &Children)>,
     mut timer_bar_query: Query<(&mut Transform, &mut Sprite), With<CardTimerBar>>,
 ) {
-    for (timer, children) in card_query.iter() {
-        for &child in children.iter() {
-            if let Ok((mut transform, mut sprite)) = timer_bar_query.get_mut(child) {
-                let progress = timer.elapsed_secs() / timer.duration().as_secs_f32();
+    for (attack_timer, children) in card_query.iter() {
+        for child in children.iter() {
+            if let Ok((mut transform, mut sprite)) = timer_bar_query.get_mut(*child) {
+                let progress = attack_timer.elapsed_secs() / attack_timer.duration().as_secs_f32();
                 let bar_width = 50.0;
 
                 sprite.custom_size = Some(Vec2::new(bar_width * progress, 5.0));
