@@ -79,9 +79,9 @@ fn debug_display_state(state: Res<State<GameState>>, input: Res<ButtonInput<KeyC
 }
 
 fn spawn_new_enemy(
-    commands: &mut Commands,
-    asset_server: &Res<AssetServer>,
-    game_config: &Res<GameConfig>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    game_config: Res<GameConfig>,
 ) {
     let sprite_size = Vec2::splat(128.0 / 2.0);
     commands
@@ -324,9 +324,6 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
         });
 
         current_x += sprite_size.x * 0.7;
-    }
-    {
-        spawn_new_enemy(&mut commands, &asset_server, &game_config);
     }
 
     commands
@@ -697,63 +694,66 @@ fn spawn_loot_screen(mut commands: Commands, game_config: Res<GameConfig>) {
     ];
 
     // Spawn background overlay
-    commands.spawn((
-        Sprite {
-            color: Color::srgb(0.2, 0.1, 0.0),
-            custom_size: Some(Vec2::new(
-                game_config.screen_width,
-                game_config.screen_height,
-            )),
-            ..default()
-        },
-        LootScreen,
-        Transform::from_xyz(0.0, 0.0, 0.9),
-    ));
+    let parent = commands
+        .spawn((
+            Sprite {
+                color: Color::srgb(0.2, 0.1, 0.0),
+                custom_size: Some(Vec2::new(
+                    game_config.screen_width,
+                    game_config.screen_height,
+                )),
+                ..default()
+            },
+            LootScreen,
+            Transform::from_xyz(0.0, 0.0, 0.9),
+        ))
+        .id();
 
     // Spawn loot items
     for (i, loot_item) in loot_items.iter().enumerate() {
         let y_pos = game_config.screen_height / 4.0 - (i as f32 + 1.0) * 50.0;
 
-        commands
-            .spawn((
-                Sprite {
-                    color: loot_item.rarity.get_color(),
-                    custom_size: Some(Vec2::new(200.0, 40.0)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, y_pos, 1.0),
-                loot_item.clone(),
-                Interaction::None,
-            ))
-            .with_children(|parent| {
-                parent.spawn((
-                    Text2d::new(&loot_item.name),
-                    TextColor(loot_item.rarity.get_text_color()),
-                    Transform::from_xyz(0.0, 0.0, 0.1),
-                ));
-            });
-    }
+        commands.entity(parent).with_children(|parent| {
+            parent
+                .spawn((
+                    Sprite {
+                        color: loot_item.rarity.get_color(),
+                        custom_size: Some(Vec2::new(200.0, 40.0)),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, y_pos, 1.0),
+                    loot_item.clone(),
+                    Interaction::None,
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text2d::new(&loot_item.name),
+                        TextColor(loot_item.rarity.get_text_color()),
+                        Transform::from_xyz(0.0, 0.0, 0.1),
+                    ));
+                });
 
-    // Spawn "Loot All" button
-    commands
-        .spawn((
-            Sprite {
-                color: Color::rgb(0.3, 0.7, 0.3),
-                custom_size: Some(Vec2::new(120.0, 40.0)),
-                ..default()
-            },
-            Transform::from_xyz(0.0, -game_config.screen_height / 3.0, 1.0),
-            LootAllButton,
-            // Interaction::None,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text2d::new("Loot All"),
-                TextColor(Color::WHITE),
-                Transform::from_xyz(0.0, 0.0, 0.1),
-            ));
-        })
-        .observe(handle_loot_all::<Pointer<Click>>());
+            parent
+                .spawn((
+                    Sprite {
+                        color: Color::rgb(0.3, 0.7, 0.3),
+                        custom_size: Some(Vec2::new(120.0, 40.0)),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, -game_config.screen_height / 3.0, 1.0),
+                    LootAllButton,
+                    // Interaction::None,
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text2d::new("Loot All"),
+                        TextColor(Color::WHITE),
+                        Transform::from_xyz(0.0, 0.0, 0.1),
+                    ));
+                })
+                .observe(handle_loot_all::<Pointer<Click>>());
+        });
+    }
 }
 
 fn handle_inventory_button<E: Debug + Clone + Reflect>() -> impl Fn(
@@ -924,7 +924,7 @@ fn main() {
                 .run_if(in_state(GameState::Battle)),
         )
         .add_systems(Update, debug_display_state)
-        // .add_systems(OnEnter(GameState::Battle), (spawn_new_enemy))
+        .add_systems(OnEnter(GameState::Battle), spawn_new_enemy)
         .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
         .add_systems(OnExit(GameState::LootScreen), despawn_loot_screen)
         .insert_resource(GameConfig {
