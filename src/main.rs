@@ -9,6 +9,7 @@ use bevy::{
     window::WindowResolution,
 };
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use rand::random_range;
 use skills::skills::{Class, Stats};
 use std::fmt::Debug;
 
@@ -128,6 +129,12 @@ fn on_enter_battle(
             Vec2::splat(128.0 / 2.0),
             EnemyCard,
         );
+        parent.spawn((
+            Name::new("Enemy Health"),
+            Text2d::new("100"),
+            Transform::from_xyz(0.0, -20.0, 0.1),
+            EnemyHealthText,
+        ));
     });
 }
 
@@ -144,7 +151,7 @@ fn spawn_new_enemy(image: Handle<Image>, game_config: &GameConfig) -> EnemyBundl
         },
         transform: Transform::from_xyz(0.0, game_config.screen_height / 2.0 + -sprite_size.y, 0.1)
             .with_scale(Vec3::splat(1.0)),
-        enemy_health: EnemyHealth(20),
+        enemy_health: EnemyHealth(100),
         stats: Stats {
             strength: 10,
             agility: 10,
@@ -157,15 +164,28 @@ fn spawn_new_enemy(image: Handle<Image>, game_config: &GameConfig) -> EnemyBundl
     enemy
 }
 
-fn update_health(
-    mut enemy_query: Query<(&mut EnemyHealth, &mut Text2d), Without<PlayerHealth>>,
-    mut player_query: Query<(&mut PlayerHealth, &mut Text2d), Without<EnemyHealth>>,
+fn update_enemy_health(
+    mut enemy_query: Query<(&mut EnemyHealth)>,
+    mut enemy_health_text_query: Query<(&Parent, &mut Text2d), With<EnemyHealthText>>,
 ) {
-    for (mut enemy_health, mut enemy_text) in &mut enemy_query {
-        enemy_text.0 = format!("Health: {}", enemy_health.0);
+    for (parent, mut health_text) in enemy_health_text_query.iter_mut() {
+        let Ok(mut health) = enemy_query.get_mut(parent.get()) else {
+            println!("No health text found");
+            return;
+        };
+        health_text.0 = format!("{}", health.0);
     }
-    for (mut player_health, mut player_text) in &mut player_query {
-        player_text.0 = format!("Health: {}", player_health.0);
+}
+fn update_player_health(
+    mut player_query: Query<(&mut PlayerHealth)>,
+    mut player_health_text_query: Query<(&Parent, &mut Text2d), With<PlayerHealthText>>,
+) {
+    for (parent, mut health_text) in player_health_text_query.iter_mut() {
+        let Ok(mut health) = player_query.get_mut(parent.get()) else {
+            println!("No health text found");
+            return;
+        };
+        health_text.0 = format!("{}", health.0);
     }
 }
 
@@ -194,6 +214,11 @@ struct DeckPile;
 
 #[derive(Component)]
 struct BattleEntity;
+
+#[derive(Component)]
+struct EnemyHealthText;
+#[derive(Component)]
+struct PlayerHealthText;
 
 /// Set up a scene that tests all sprite anchor types.
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Res<GameConfig>) {
@@ -240,6 +265,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
             Name::new("Health Text"),
             Text2d::new("100"),
             Transform::from_xyz(0.0, -sprite_size.y, 0.1),
+            PlayerHealthText,
         ));
         // add skills
 
@@ -249,18 +275,20 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                     Name::new(format!("Player Card {}", i)),
                     card.sprite.clone(),
                     card.selectable_card.clone(),
-                    Transform::from_xyz(current_x, -screen_height / 4.0, 0.0)
-                        .with_scale(Vec3::splat(1.0)),
+                    Transform::from_xyz(current_x, sprite_size.y, 0.0).with_scale(Vec3::splat(1.0)),
                     PlayerCard,
                     Damage(10),
-                    CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+                    CardAttackTimer(Timer::from_seconds(
+                        random_range(1.0..3.0),
+                        TimerMode::Repeating,
+                    )),
                     // BattleEntity,
                 ))
                 // .observe(select_card_on::<Pointer<Click>>())
                 .observe(hover_card_on::<Pointer<Over>>())
                 .observe(hover_card_out::<Pointer<Out>>())
                 .with_children(|parent| {
-                    add_timer_bar(parent, card);
+                    add_timer_bar(parent);
                 });
             current_x += sprite_size.x * 0.7;
         }
@@ -297,22 +325,26 @@ fn add_card(
     sprite_size: Vec2,
     owner: impl Component,
 ) {
-    parent.spawn((
-        Name::new("Card"),
-        Sprite {
-            image: card_image,
-            custom_size: Some(sprite_size),
-            ..default()
-        },
-        Transform::from_xyz(0.0, -sprite_size.y / 2.0, 0.0).with_scale(Vec3::splat(1.0)),
-        owner,
-        Damage(10),
-        CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
-        BattleEntity,
-    ));
+    parent
+        .spawn((
+            Name::new("Card"),
+            Sprite {
+                image: card_image,
+                custom_size: Some(sprite_size),
+                ..default()
+            },
+            Transform::from_xyz(0.0, -sprite_size.y, 0.0).with_scale(Vec3::splat(1.0)),
+            owner,
+            Damage(10),
+            CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+            BattleEntity,
+        ))
+        .with_children(|parent| {
+            add_timer_bar(parent);
+        });
 }
 
-fn add_timer_bar(parent: &mut ChildBuilder, card: &Card) {
+fn add_timer_bar(parent: &mut ChildBuilder) {
     parent.spawn((
         Sprite {
             color: Color::srgb(0.3, 0.3, 0.3),
@@ -698,35 +730,6 @@ fn handle_loot_all<E: Debug + Clone + Reflect>() -> impl Fn(
     }
 }
 
-fn enemy_skill_auto_attack(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut skill_query: Query<(Entity, &mut CardAttackTimer, &Damage), With<EnemyCard>>,
-    mut player_query: Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
-    enemy_query: Query<&Stats, With<EnemyHealth>>,
-) {
-    let Ok(enemy_stats) = enemy_query.get_single() else {
-        return;
-    };
-
-    let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
-        return;
-    };
-
-    for (skill_entity, mut timer, damage) in skill_query.iter_mut() {
-        timer.tick(time.delta());
-
-        if timer.just_finished() {
-            let damage = calculate_enemy_damage(enemy_stats, player_stats);
-            player_health.0 = player_health.0.saturating_sub(damage);
-            println!(
-                "Enemy skill auto-attacks for {} damage! Player health: {}",
-                damage, player_health.0
-            );
-        }
-    }
-}
-
 fn update_skill_timer_bars(
     card_query: Query<(&CardAttackTimer, &Children)>,
     mut timer_bar_query: Query<(&mut Transform, &mut Sprite), With<CardTimerBar>>,
@@ -790,11 +793,12 @@ fn main() {
         .add_systems(
             Update,
             (
-                update_health,
+                update_enemy_health,
+                update_player_health,
                 update_skill_timer_bars,
                 enemy_auto_attack,
                 player_auto_attack,
-                enemy_skill_auto_attack,
+                // enemy_skill_auto_attack,
                 check_enemy_death,
                 // handle_inventory_button,
             )
