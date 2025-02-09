@@ -2,7 +2,11 @@
 //! sprite bounds, so the sprite atlas can be picked by clicking on its transparent areas.
 
 use bevy::{
-    prelude::*, sprite::Anchor, state::commands, ui::Interaction, window::WindowResolution,
+    prelude::*,
+    sprite::{self, Anchor},
+    state::commands,
+    ui::Interaction,
+    window::WindowResolution,
 };
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use skills::skills::{Class, Stats};
@@ -89,6 +93,11 @@ fn debug_display_state(state: Res<State<GameState>>, input: Res<ButtonInput<KeyC
     if input.just_pressed(KeyCode::Escape) {
         println!("Current state: {:?}", state.get());
     }
+    if input.just_pressed(KeyCode::KeyQ) {
+        println!("Q pressed");
+        // quit the game
+        std::process::exit(0);
+    }
 }
 
 #[derive(Component)]
@@ -102,6 +111,24 @@ struct EnemyBundle {
     transform: Transform,
     enemy_health: EnemyHealth,
     stats: Stats,
+}
+
+fn on_enter_battle(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    game_config: Res<GameConfig>,
+) {
+    let enemybundle = spawn_new_enemy(asset_server.load("boss_bee.png"), &game_config);
+    let enemyid = commands.spawn(enemybundle).id();
+
+    commands.entity(enemyid).with_children(|parent| {
+        add_card(
+            parent,
+            asset_server.load("player.png"),
+            Vec2::splat(128.0 / 2.0),
+            EnemyCard,
+        );
+    });
 }
 
 fn spawn_new_enemy(image: Handle<Image>, game_config: &GameConfig) -> EnemyBundle {
@@ -206,43 +233,18 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
     let starting_x = 0.0 - (cards.len() / 2) as f32 * (sprite_size.x * 0.7);
     let mut current_x = starting_x;
     let playerbundle = spawn_player(asset_server.load("player.png"), sprite_size, screen_height);
-    let enemybundle = spawn_new_enemy(asset_server.load("boss_bee.png"), &game_config);
 
-    // commands.spawn((
-    //     EnemyEntity,
-    //     Name::new("Enemy"),
-    //     EnemyHealth(20),
-    //     Sprite {
-    //         image: asset_server.load("boss_bee.png"),
-    //         custom_size: Some(Vec2::splat(64.0)),
-    //         ..default()
-    //     },
-    //     Transform::from_xyz(0.0, game_config.screen_height / 2.0, 0.0),
-    // ));
-
-    let enemyid = commands.spawn(enemybundle).id();
-
-    commands.entity(enemyid).with_children(|parent| {
+    let playerid = commands.spawn(playerbundle).with_children(|parent| {
+        // add health text
         parent.spawn((
-            Name::new("Enemy Card"),
-            Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            Transform::from_xyz(current_x, screen_height, 0.0).with_scale(Vec3::splat(1.0)),
-            EnemyCard,
-            Damage(10),
-            CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
-            BattleEntity,
+            Name::new("Health Text"),
+            Text2d::new("100"),
+            Transform::from_xyz(0.0, -sprite_size.y, 0.1),
         ));
-    });
+        // add skills
 
-    let playerid = commands.spawn(playerbundle).id();
-
-    for (i, card) in cards.iter().enumerate() {
-        let card_entity = commands.entity(playerid).with_children(|parent| {
-            let card_entity = parent
+        for (i, card) in cards.iter().enumerate() {
+            parent
                 .spawn((
                     Name::new(format!("Player Card {}", i)),
                     card.sprite.clone(),
@@ -252,38 +254,17 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                     PlayerCard,
                     Damage(10),
                     CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
-                    BattleEntity,
+                    // BattleEntity,
                 ))
                 // .observe(select_card_on::<Pointer<Click>>())
                 .observe(hover_card_on::<Pointer<Over>>())
                 .observe(hover_card_out::<Pointer<Out>>())
                 .with_children(|parent| {
-                    // Background bar
-                    // parent.spawn((
-                    //     Sprite {
-                    //         color: Color::srgb(0.3, 0.3, 0.3),
-                    //         custom_size: Some(Vec2::new(50.0, 5.0)),
-                    //         ..default()
-                    //     },
-                    //     Transform::from_xyz(0.0, -20.0, 0.1),
-                    // ));
-
-                    // // Timer fill bar
-                    // parent.spawn((
-                    //     Sprite {
-                    //         color: RED,
-                    //         custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
-                    //         ..default()
-                    //     },
-                    //     Transform::from_xyz(-25.0, -20.0, 0.2),
-                    //     CardTimerBar,
-                    // ));
                     add_timer_bar(parent, card);
                 });
-
             current_x += sprite_size.x * 0.7;
-        });
-    }
+        }
+    });
 
     // Spawn inventory button
     commands
@@ -308,6 +289,27 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
             0.0, 0.7, 0.5,
         )))
         .observe(handle_inventory_button::<Pointer<Click>>());
+}
+
+fn add_card(
+    parent: &mut ChildBuilder,
+    card_image: Handle<Image>,
+    sprite_size: Vec2,
+    owner: impl Component,
+) {
+    parent.spawn((
+        Name::new("Card"),
+        Sprite {
+            image: card_image,
+            custom_size: Some(sprite_size),
+            ..default()
+        },
+        Transform::from_xyz(0.0, -sprite_size.y / 2.0, 0.0).with_scale(Vec3::splat(1.0)),
+        owner,
+        Damage(10),
+        CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+        BattleEntity,
+    ));
 }
 
 fn add_timer_bar(parent: &mut ChildBuilder, card: &Card) {
@@ -415,83 +417,6 @@ fn calculate_damage(player_stats: &Stats, enemy_stats: &Stats, damage: usize) ->
     total_damage
 }
 
-fn draw_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
-    Trigger<E>,
-    (
-        Query<Entity, With<DeckPile>>,
-        Query<(Entity, &mut Transform), With<PlayerCard>>,
-        Commands,
-        Res<AssetServer>,
-        Res<GameConfig>,
-    ),
-) {
-    move |ev, (deck_query, mut player_cards, mut commands, asset_server, game_config)| {
-        let Ok(_) = deck_query.get(ev.entity()) else {
-            return;
-        };
-
-        let sprite_size = Vec2::splat(128.0 / 2.0);
-        let screen_height = game_config.screen_height;
-
-        // Count existing player cards
-        let card_count = player_cards.iter().count();
-
-        // Calculate the starting position for the first card
-        let total_width = (card_count + 1) as f32 * sprite_size.x * 0.7; // +1 for the new card
-        let starting_x = -total_width / 2.0 + (sprite_size.x * 0.7 / 2.0);
-
-        // Update positions of existing cards
-        for (i, (entity, mut transform)) in player_cards.iter_mut().enumerate() {
-            let new_x = starting_x + (i as f32 * sprite_size.x * 0.7);
-            transform.translation.x = new_x;
-        }
-
-        // Calculate position for the new card
-        let new_x = starting_x + (card_count as f32 * sprite_size.x * 0.7);
-
-        let card_entity = commands
-            .spawn((
-                Sprite {
-                    image: asset_server.load("boss_bee.png"),
-                    custom_size: Some(sprite_size),
-                    ..default()
-                },
-                SelectableCard(false),
-                Transform::from_xyz(new_x, -screen_height / 4.0, 0.0).with_scale(Vec3::splat(1.0)),
-                PlayerCard,
-                Damage(10),
-                CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
-            ))
-            // .observe(select_card_on::<Pointer<Click>>())
-            .observe(hover_card_on::<Pointer<Over>>())
-            .observe(hover_card_out::<Pointer<Out>>())
-            .id();
-
-        commands.entity(card_entity).with_children(|parent| {
-            // Background bar
-            parent.spawn((
-                Sprite {
-                    color: Color::srgb(0.3, 0.3, 0.3),
-                    custom_size: Some(Vec2::new(50.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, -20.0, 0.1),
-            ));
-
-            // Timer fill bar
-            parent.spawn((
-                Sprite {
-                    color: RED,
-                    custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
-                    ..default()
-                },
-                Transform::from_xyz(-25.0, -20.0, 0.2),
-                CardTimerBar,
-            ));
-        });
-    }
-}
-
 fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
     let enemy_strength = enemy_stats.strength;
     let player_agility = player_stats.agility;
@@ -530,7 +455,6 @@ fn enemy_auto_attack(
     mut enemy_cards_query: Query<(&mut CardAttackTimer), With<EnemyCard>>,
     mut player_query: Query<(&mut PlayerHealth, &Stats), With<PlayerEntity>>,
     mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyEntity>>,
-    // Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>
 ) {
     let Ok((mut player_health, player_stats)) = player_query.get_single_mut().map_err(|err| {
         println!("[enemy_auto_attack] No player found: {:?}", err);
@@ -548,7 +472,6 @@ fn enemy_auto_attack(
     };
 
     for (mut timer) in enemy_cards_query.iter_mut() {
-        // println!("enemy_auto_attack: timer: {:?}", timer.0.elapsed_secs());
         timer.0.tick(time.delta());
         if timer.0.finished() {
             println!("attack ready");
@@ -879,7 +802,7 @@ fn main() {
                 .run_if(in_state(GameState::Battle)),
         )
         .add_systems(Update, debug_display_state)
-        // .add_systems(OnEnter(GameState::Battle), spawn_new_enemy)
+        .add_systems(OnEnter(GameState::Battle), on_enter_battle)
         .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
         .add_systems(OnExit(GameState::Battle), despawn_battle_entities)
         .add_systems(OnExit(GameState::LootScreen), despawn_loot_screen)
