@@ -1,7 +1,7 @@
 pub mod skills {
     use bevy::prelude::*;
 
-    #[derive(Component, Clone)]
+    #[derive(Component, Clone, Default)]
     pub struct Stats {
         pub strength: usize,
         pub agility: usize,

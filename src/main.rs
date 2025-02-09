@@ -4,21 +4,34 @@
 use bevy::{
     prelude::*, sprite::Anchor, state::commands, ui::Interaction, window::WindowResolution,
 };
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use skills::skills::{Class, Stats};
 use std::fmt::Debug;
 
 mod card;
 mod skills;
 
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Default)]
 struct GameConfig {
     screen_width: f32,
     screen_height: f32,
 }
 
-pub const RED: Color = Color::rgb(1.0, 0.0, 0.0);
-pub const YELLOW: Color = Color::rgb(1.0, 1.0, 0.0);
-pub const GREEN: Color = Color::rgb(0.0, 1.0, 0.0);
+#[derive(Component)]
+struct EnemyHealth(usize);
+
+#[derive(Component)]
+struct PlayerHealth(usize);
+
+#[derive(Component)]
+struct PlayerEntity;
+
+#[derive(Component, Deref, DerefMut)]
+struct CardAttackTimer(Timer);
+
+pub const RED: Color = Color::srgb(1.0, 0.0, 0.0);
+pub const YELLOW: Color = Color::srgb(1.0, 1.0, 0.0);
+pub const GREEN: Color = Color::srgb(0.0, 1.0, 0.0);
 
 #[derive(States, Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
 enum GameState {
@@ -44,8 +57,8 @@ impl LootRarity {
     fn get_color(&self) -> Color {
         match self {
             LootRarity::Common => Color::WHITE,
-            LootRarity::Rare => Color::rgb(0.0, 0.5, 1.0),
-            LootRarity::Epic => Color::rgb(0.8, 0.0, 0.8),
+            LootRarity::Rare => Color::srgb(0.0, 0.5, 1.0),
+            LootRarity::Epic => Color::srgb(0.8, 0.0, 0.8),
         }
     }
 
@@ -78,138 +91,43 @@ fn debug_display_state(state: Res<State<GameState>>, input: Res<ButtonInput<KeyC
     }
 }
 
-fn spawn_new_enemy(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    game_config: Res<GameConfig>,
-) {
+#[derive(Component)]
+struct EnemyEntity;
+
+#[derive(Bundle)]
+struct EnemyBundle {
+    enemy: EnemyEntity,
+    name: Name,
+    sprite: Sprite,
+    transform: Transform,
+    enemy_health: EnemyHealth,
+    stats: Stats,
+}
+
+fn spawn_new_enemy(image: Handle<Image>, game_config: &GameConfig) -> EnemyBundle {
+    println!("Spawning new enemy");
     let sprite_size = Vec2::splat(128.0 / 2.0);
-    commands
-        .spawn((
-            Sprite {
-                image: asset_server.load("boss_bee.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            Transform::from_xyz(0.0, game_config.screen_height / 2.0 + -sprite_size.y, 0.1)
-                .with_scale(Vec3::splat(1.0)),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                EnemyHealth(20),
-                Text2d::new("Enemy"),
-                Transform::from_xyz(0.0, -30.0, 0.1).with_scale(Vec3::splat(1.0)),
-                Stats {
-                    strength: 10,
-                    agility: 10,
-                    stamina: 10,
-                    perception: 10,
-                    intelligence: 10,
-                },
-                Class::Warrior,
-            ));
-
-            // Spawn the timer bar background
-            parent.spawn((
-                Sprite {
-                    color: Color::srgb(0.3, 0.3, 0.3),
-                    custom_size: Some(Vec2::new(50.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, -40.0, 0.1),
-            ));
-
-            // Spawn the timer bar fill
-            parent.spawn((
-                Sprite {
-                    color: RED,
-                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(-25.0, -40.0, 0.2),
-            ));
-        });
-
-    let enemyskills = [
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 1,
-            description: "Fireball".to_string(),
+    let enemy = EnemyBundle {
+        enemy: EnemyEntity,
+        name: Name::new("Enemy Bundle"),
+        sprite: Sprite {
+            image,
+            custom_size: Some(sprite_size),
+            ..default()
         },
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 2,
-            description: "Ice Blast".to_string(),
+        transform: Transform::from_xyz(0.0, game_config.screen_height / 2.0 + -sprite_size.y, 0.1)
+            .with_scale(Vec3::splat(1.0)),
+        enemy_health: EnemyHealth(20),
+        stats: Stats {
+            strength: 10,
+            agility: 10,
+            stamina: 10,
+            perception: 10,
+            intelligence: 10,
         },
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("player.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 3,
-            description: "Lightning Strike".to_string(),
-        },
-    ];
+    };
 
-    // Spawn enemy skills
-    let enemy_skills_y = game_config.screen_height / 2.0 - sprite_size.y * 2.0; // Position below enemy
-    let starting_x = 0.0 - (enemyskills.len() / 2) as f32 * (sprite_size.x * 0.7);
-    let mut current_x = starting_x;
-
-    for (i, card) in enemyskills.iter().enumerate() {
-        let skill_entity = commands
-            .spawn((
-                card.sprite.clone(),
-                card.selectable_card.clone(),
-                Transform::from_xyz(current_x, enemy_skills_y, 0.0).with_scale(Vec3::splat(1.0)),
-                EnemyCard,
-                Damage(15),
-                CardAttackTimer(Timer::from_seconds(4.0, TimerMode::Repeating)),
-            ))
-            .id();
-
-        commands.entity(skill_entity).with_children(|parent| {
-            parent.spawn((
-                Text2d::new(&card.description),
-                Transform::from_xyz(0.0, -30.0, 0.1),
-            ));
-
-            // Background bar
-            parent.spawn((
-                Sprite {
-                    color: Color::srgb(0.3, 0.3, 0.3),
-                    custom_size: Some(Vec2::new(50.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, -20.0, 0.1),
-            ));
-
-            // Timer fill bar
-            parent.spawn((
-                Sprite {
-                    color: RED,
-                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(-25.0, -20.0, 0.2),
-                CardTimerBar,
-            ));
-        });
-
-        current_x += sprite_size.x * 0.7;
-    }
+    enemy
 }
 
 fn update_health(
@@ -247,8 +165,12 @@ struct Damage(usize);
 #[derive(Component)]
 struct DeckPile;
 
+#[derive(Component)]
+struct BattleEntity;
+
 /// Set up a scene that tests all sprite anchor types.
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Res<GameConfig>) {
+    println!("Setting up scene");
     commands.spawn(Camera2d);
 
     let len = 128.0;
@@ -283,78 +205,89 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
 
     let starting_x = 0.0 - (cards.len() / 2) as f32 * (sprite_size.x * 0.7);
     let mut current_x = starting_x;
+    let playerbundle = spawn_player(asset_server.load("player.png"), sprite_size, screen_height);
+    let enemybundle = spawn_new_enemy(asset_server.load("boss_bee.png"), &game_config);
 
-    for (i, card) in cards.iter().enumerate() {
-        let card_entity = commands
-            .spawn((
-                card.sprite.clone(),
-                card.selectable_card.clone(),
-                Transform::from_xyz(current_x, -screen_height / 4.0, 0.0)
-                    .with_scale(Vec3::splat(1.0)),
-                PlayerCard,
-                Damage(10),
-                CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
-            ))
-            .observe(select_card_on::<Pointer<Click>>())
-            .observe(hover_card_on::<Pointer<Over>>())
-            .observe(hover_card_out::<Pointer<Out>>())
-            .id();
+    // commands.spawn((
+    //     EnemyEntity,
+    //     Name::new("Enemy"),
+    //     EnemyHealth(20),
+    //     Sprite {
+    //         image: asset_server.load("boss_bee.png"),
+    //         custom_size: Some(Vec2::splat(64.0)),
+    //         ..default()
+    //     },
+    //     Transform::from_xyz(0.0, game_config.screen_height / 2.0, 0.0),
+    // ));
 
-        commands.entity(card_entity).with_children(|parent| {
-            // Background bar
-            parent.spawn((
-                Sprite {
-                    color: Color::srgb(0.3, 0.3, 0.3),
-                    custom_size: Some(Vec2::new(50.0, 5.0)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, -20.0, 0.1),
-            ));
+    let enemyid = commands.spawn(enemybundle).id();
 
-            // Timer fill bar
-            parent.spawn((
-                Sprite {
-                    color: RED,
-                    custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
-                    ..default()
-                },
-                Transform::from_xyz(-25.0, -20.0, 0.2),
-                CardTimerBar,
-            ));
-        });
-
-        current_x += sprite_size.x * 0.7;
-    }
-
-    commands
-        .spawn((
+    commands.entity(enemyid).with_children(|parent| {
+        parent.spawn((
+            Name::new("Enemy Card"),
             Sprite {
                 image: asset_server.load("player.png"),
                 custom_size: Some(sprite_size),
                 ..default()
             },
-            Transform::from_xyz(0.0, -screen_height / 2.0 + sprite_size.y, 0.1)
-                .with_scale(Vec3::splat(1.0)),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                PlayerHealth(100),
-                Text2d::new("Player"),
-                Transform::from_xyz(0.0, -30.0, 0.1).with_scale(Vec3::splat(1.0)),
-                Stats {
-                    strength: 20,
-                    agility: 10,
-                    stamina: 10,
-                    perception: 10,
-                    intelligence: 10,
-                },
-                Class::Warrior,
-            ));
+            Transform::from_xyz(current_x, screen_height, 0.0).with_scale(Vec3::splat(1.0)),
+            EnemyCard,
+            Damage(10),
+            CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+            BattleEntity,
+        ));
+    });
+
+    let playerid = commands.spawn(playerbundle).id();
+
+    for (i, card) in cards.iter().enumerate() {
+        let card_entity = commands.entity(playerid).with_children(|parent| {
+            let card_entity = parent
+                .spawn((
+                    Name::new(format!("Player Card {}", i)),
+                    card.sprite.clone(),
+                    card.selectable_card.clone(),
+                    Transform::from_xyz(current_x, -screen_height / 4.0, 0.0)
+                        .with_scale(Vec3::splat(1.0)),
+                    PlayerCard,
+                    Damage(10),
+                    CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+                    BattleEntity,
+                ))
+                // .observe(select_card_on::<Pointer<Click>>())
+                .observe(hover_card_on::<Pointer<Over>>())
+                .observe(hover_card_out::<Pointer<Out>>())
+                .with_children(|parent| {
+                    // Background bar
+                    parent.spawn((
+                        Sprite {
+                            color: Color::srgb(0.3, 0.3, 0.3),
+                            custom_size: Some(Vec2::new(50.0, 5.0)),
+                            ..default()
+                        },
+                        Transform::from_xyz(0.0, -20.0, 0.1),
+                    ));
+
+                    // Timer fill bar
+                    parent.spawn((
+                        Sprite {
+                            color: RED,
+                            custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
+                            ..default()
+                        },
+                        Transform::from_xyz(-25.0, -20.0, 0.2),
+                        CardTimerBar,
+                    ));
+                });
+
+            current_x += sprite_size.x * 0.7;
         });
+    }
 
     // Spawn inventory button
     commands
         .spawn((
+            Name::new("Inventory Button"),
             Sprite {
                 color: Color::srgb(0.3, 0.3, 0.3),
                 custom_size: Some(Vec2::new(40.0, 40.0)),
@@ -376,6 +309,43 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
         .observe(handle_inventory_button::<Pointer<Click>>());
 }
 
+#[derive(Bundle)]
+struct PlayerBundle {
+    player: PlayerEntity,
+    name: Name,
+    sprite: Sprite,
+    transform: Transform,
+    player_health: PlayerHealth,
+    stats: Stats,
+    class: Class,
+}
+
+fn spawn_player(image: Handle<Image>, sprite_size: Vec2, screen_height: f32) -> PlayerBundle {
+    println!("Spawning player");
+    let player = PlayerBundle {
+        player: PlayerEntity,
+        name: Name::new("Player"),
+        sprite: Sprite {
+            image,
+            custom_size: Some(sprite_size),
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, -screen_height / 2.0 + sprite_size.y, 0.1)
+            .with_scale(Vec3::splat(1.0)),
+        player_health: PlayerHealth(100),
+        stats: Stats {
+            strength: 20,
+            agility: 10,
+            stamina: 10,
+            perception: 10,
+            intelligence: 10,
+        },
+        class: Class::Warrior,
+    };
+
+    player
+}
+
 fn change_sprite_color<E: Debug + Clone + Reflect>(
     color: Color,
 ) -> impl Fn(Trigger<E>, (Query<&mut Sprite>), Commands) {
@@ -384,70 +354,6 @@ fn change_sprite_color<E: Debug + Clone + Reflect>(
             return;
         };
         sprite.color = color;
-    }
-}
-
-#[derive(Component)]
-struct EnemyHealth(usize);
-
-#[derive(Component)]
-struct PlayerHealth(usize);
-
-#[derive(Component, Deref, DerefMut)]
-struct CardAttackTimer(Timer);
-
-fn select_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
-    Trigger<E>,
-    (
-        Query<(&mut SelectableCard, &Damage)>,
-        Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>,
-        Query<(&mut PlayerHealth, &Stats), With<PlayerHealth>>,
-        Query<(Entity, &mut Transform), With<PlayerCard>>,
-        Commands,
-    ),
-) {
-    move |ev, (mut sprites, mut enemy_query, mut player_query, mut player_cards, mut commands)| {
-        let Ok((mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
-            println!("No selectable card found");
-            return;
-        };
-
-        // Get the first (and only) enemy
-        let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
-            println!("No enemy found");
-            return;
-        };
-
-        // Get the player stats
-        let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
-            println!("No player found");
-            return;
-        };
-
-        // Calculate and apply damage
-        let damage = calculate_damage(player_stats, enemy_stats, damage.0);
-        enemy_health.0 = enemy_health.0.saturating_sub(damage);
-
-        // Despawn the card
-        commands.entity(ev.entity()).despawn_recursive();
-
-        // Recenter remaining cards
-        let remaining_cards = player_cards.iter().count() - 1; // -1 because we just despawned one
-        if remaining_cards > 0 {
-            let sprite_size = Vec2::splat(128.0 / 2.0);
-            let total_width = remaining_cards as f32 * sprite_size.x * 0.7;
-            let starting_x = -total_width / 2.0 + (sprite_size.x * 0.7 / 2.0);
-
-            // Update positions of remaining cards
-            let mut current_index = 0;
-            for (entity, mut transform) in player_cards.iter_mut() {
-                if entity != ev.entity() {
-                    let new_x = starting_x + (current_index as f32 * sprite_size.x * 0.7);
-                    transform.translation.x = new_x;
-                    current_index += 1;
-                }
-            }
-        }
     }
 }
 
@@ -535,7 +441,7 @@ fn draw_card_on<E: Debug + Clone + Reflect>() -> impl Fn(
                 Damage(10),
                 CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             ))
-            .observe(select_card_on::<Pointer<Click>>())
+            // .observe(select_card_on::<Pointer<Click>>())
             .observe(hover_card_on::<Pointer<Over>>())
             .observe(hover_card_out::<Pointer<Out>>())
             .id();
@@ -601,14 +507,21 @@ struct CardTimerBar;
 fn enemy_auto_attack(
     time: Res<Time>,
     mut enemy_cards_query: Query<(&mut CardAttackTimer), With<EnemyCard>>,
-    mut player_query: Query<(&mut PlayerHealth, &Stats)>,
-    mut enemy_query: Query<(&mut EnemyHealth, &Stats)>,
+    mut player_query: Query<(&mut PlayerHealth, &Stats), With<PlayerEntity>>,
+    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyEntity>>,
+    // Query<(&mut EnemyHealth, &Stats), With<EnemyHealth>>
 ) {
-    let Ok((mut player_health, player_stats)) = player_query.get_single_mut() else {
+    let Ok((mut player_health, player_stats)) = player_query.get_single_mut().map_err(|err| {
+        println!("[enemy_auto_attack] No player found: {:?}", err);
+        return;
+    }) else {
         println!("[enemy_auto_attack] No player found");
         return;
     };
-    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
+    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut().map_err(|err| {
+        println!("[enemy_auto_attack] No enemy found: {:?}", err);
+        return;
+    }) else {
         println!("[enemy_auto_attack] No enemy found");
         return;
     };
@@ -618,7 +531,7 @@ fn enemy_auto_attack(
         timer.0.tick(time.delta());
         if timer.0.finished() {
             println!("attack ready");
-            let damage = calculate_enemy_damage(enemy_stats, player_stats);
+            let damage = calculate_enemy_damage(&enemy_stats, &player_stats);
             player_health.0 = player_health.0.saturating_sub(damage);
             println!(
                 "Enemy auto-attacks for {} damage! Player health: {}",
@@ -631,7 +544,7 @@ fn enemy_auto_attack(
 fn player_auto_attack(
     time: Res<Time>,
     mut player_cards_query: Query<(&mut CardAttackTimer), With<PlayerCard>>,
-    mut enemy_query: Query<(&mut EnemyHealth, &Stats)>,
+    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyEntity>>,
     mut player_stats_query: Query<&Stats, With<PlayerHealth>>,
 ) {
     let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
@@ -647,7 +560,7 @@ fn player_auto_attack(
         timer.0.tick(time.delta());
         // println!("player_auto_attack: timer: {:?}", timer.0.elapsed_secs());
         if timer.0.finished() {
-            let damage = calculate_player_damage(player_stats, enemy_stats);
+            let damage = calculate_player_damage(&player_stats, &enemy_stats);
             enemy_health.0 = enemy_health.0.saturating_sub(damage);
             println!(
                 "Player auto-attacks for {} damage! Enemy health: {}",
@@ -658,12 +571,14 @@ fn player_auto_attack(
 }
 
 fn check_enemy_death(
-    enemy_query: Query<&EnemyHealth>,
+    enemy_query: Query<(Entity, &EnemyHealth)>,
     mut next_state: ResMut<NextState<GameState>>,
+    mut commands: Commands,
 ) {
-    if let Ok(enemy_health) = enemy_query.get_single() {
+    if let Ok((entity, enemy_health)) = enemy_query.get_single() {
         if enemy_health.0 == 0 {
             next_state.set(GameState::LootScreen);
+            commands.entity(entity).despawn_recursive();
         }
     }
 }
@@ -893,9 +808,23 @@ fn update_skill_timer_bars(
     }
 }
 
+fn despawn_battle_entities(
+    mut commands: Commands,
+    battle_entity_query: Query<Entity, With<BattleEntity>>,
+    enemy_entity_query: Query<Entity, With<EnemyEntity>>,
+) {
+    println!("Despawning battle entities");
+    for entity in battle_entity_query.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+    for entity in enemy_entity_query.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
 fn main() {
     App::new()
-        .add_plugins(
+        .add_plugins((
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
                 .set(WindowPlugin {
@@ -906,7 +835,11 @@ fn main() {
                     }),
                     ..default()
                 }),
-        )
+            WorldInspectorPlugin::new(),
+        ))
+        // .add_plugins(InspectorPlugin::<GameState>::new())
+        // .add_plugins(InspectorPlugin::<GameConfig>::new())
+        // .add_plugins(WorldInspectorPlugin::new())
         .init_state::<GameState>()
         .init_resource::<Inventory>()
         .add_systems(Startup, (setup))
@@ -921,11 +854,13 @@ fn main() {
                 check_enemy_death,
                 // handle_inventory_button,
             )
+                .chain()
                 .run_if(in_state(GameState::Battle)),
         )
         .add_systems(Update, debug_display_state)
-        .add_systems(OnEnter(GameState::Battle), spawn_new_enemy)
+        // .add_systems(OnEnter(GameState::Battle), spawn_new_enemy)
         .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
+        // .add_systems(OnExit(GameState::Battle), despawn_battle_entities)
         .add_systems(OnExit(GameState::LootScreen), despawn_loot_screen)
         .insert_resource(GameConfig {
             screen_width: 640.0,
