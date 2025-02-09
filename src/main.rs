@@ -259,25 +259,26 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                 .observe(hover_card_out::<Pointer<Out>>())
                 .with_children(|parent| {
                     // Background bar
-                    parent.spawn((
-                        Sprite {
-                            color: Color::srgb(0.3, 0.3, 0.3),
-                            custom_size: Some(Vec2::new(50.0, 5.0)),
-                            ..default()
-                        },
-                        Transform::from_xyz(0.0, -20.0, 0.1),
-                    ));
+                    // parent.spawn((
+                    //     Sprite {
+                    //         color: Color::srgb(0.3, 0.3, 0.3),
+                    //         custom_size: Some(Vec2::new(50.0, 5.0)),
+                    //         ..default()
+                    //     },
+                    //     Transform::from_xyz(0.0, -20.0, 0.1),
+                    // ));
 
-                    // Timer fill bar
-                    parent.spawn((
-                        Sprite {
-                            color: RED,
-                            custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
-                            ..default()
-                        },
-                        Transform::from_xyz(-25.0, -20.0, 0.2),
-                        CardTimerBar,
-                    ));
+                    // // Timer fill bar
+                    // parent.spawn((
+                    //     Sprite {
+                    //         color: RED,
+                    //         custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
+                    //         ..default()
+                    //     },
+                    //     Transform::from_xyz(-25.0, -20.0, 0.2),
+                    //     CardTimerBar,
+                    // ));
+                    add_timer_bar(parent, card);
                 });
 
             current_x += sprite_size.x * 0.7;
@@ -307,6 +308,26 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
             0.0, 0.7, 0.5,
         )))
         .observe(handle_inventory_button::<Pointer<Click>>());
+}
+
+fn add_timer_bar(parent: &mut ChildBuilder, card: &Card) {
+    parent.spawn((
+        Sprite {
+            color: Color::srgb(0.3, 0.3, 0.3),
+            custom_size: Some(Vec2::new(50.0, 5.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, -20.0, 0.1),
+    ));
+    parent.spawn((
+        Sprite {
+            color: RED,
+            custom_size: Some(Vec2::new(0.0, 5.0)), // Start at width 0
+            ..default()
+        },
+        Transform::from_xyz(-25.0, -20.0, 0.2),
+        CardTimerBar,
+    ));
 }
 
 #[derive(Bundle)]
@@ -860,7 +881,7 @@ fn main() {
         .add_systems(Update, debug_display_state)
         // .add_systems(OnEnter(GameState::Battle), spawn_new_enemy)
         .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
-        // .add_systems(OnExit(GameState::Battle), despawn_battle_entities)
+        .add_systems(OnExit(GameState::Battle), despawn_battle_entities)
         .add_systems(OnExit(GameState::LootScreen), despawn_loot_screen)
         .insert_resource(GameConfig {
             screen_width: 640.0,
