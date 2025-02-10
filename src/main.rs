@@ -23,10 +23,10 @@ struct GameConfig {
 }
 
 #[derive(Component)]
-struct EnemyHealth(usize);
+struct EnemyHealth(i32);
 
 #[derive(Component)]
-struct PlayerHealth(usize);
+struct PlayerHealth(i32);
 
 #[derive(Component)]
 struct PlayerEntity;
@@ -117,6 +117,11 @@ struct EnemyBundle {
     effects: Effects,
 }
 
+enum CardPosition {
+    Top,
+    Bottom,
+}
+
 fn on_enter_battle(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -130,13 +135,19 @@ fn on_enter_battle(
     let enemybundle = spawn_new_enemy(asset_server.load("boss_bee.png"), &game_config);
     let enemyid = commands.spawn(enemybundle).id();
 
+    let num_cards = random_range(1..4);
     commands.entity(enemyid).with_children(|parent| {
-        add_card(
-            parent,
-            asset_server.load("player.png"),
-            Vec2::splat(128.0 / 2.0),
-            EnemyCard,
-        );
+        for i in 0..num_cards {
+            add_card(
+                parent,
+                // asset_server.load("player.png"),
+                &asset_server,
+                Vec2::splat(128.0 / 2.0),
+                EnemyCard,
+                (i, num_cards),
+                CardPosition::Bottom,
+            );
+        }
         parent.spawn((
             Name::new("Enemy Health"),
             Text2d::new("100"),
@@ -239,42 +250,44 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
     let len = 128.0;
     let sprite_size = Vec2::splat(len / 2.0);
 
-    let cards = [
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("boss_bee.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 1,
-            description: "This is test card #1".to_string(),
-            effect: CardEffect::DirectDamage(10),
-            cooldown: 2.0,
-        },
-        Card {
-            sprite: Sprite {
-                image: asset_server.load("boss_bee.png"),
-                custom_size: Some(sprite_size),
-                ..default()
-            },
-            selectable_card: SelectableCard(false),
-            id: 2,
-            description: "test card #2".to_string(),
-            effect: CardEffect::DamageOverTime {
-                damage: 5,
-                duration: 3.0,
-                frequency: 0.5,
-            },
-            cooldown: 4.0,
-        },
-    ];
+    // let cards = [
+    //     Card {
+    //         sprite: Sprite {
+    //             image: asset_server.load("boss_bee.png"),
+    //             custom_size: Some(sprite_size),
+    //             ..default()
+    //         },
+    //         selectable_card: SelectableCard(false),
+    //         id: 1,
+    //         description: "This is test card #1".to_string(),
+    //         effect: CardEffect::DirectDamage(10),
+    //         cooldown: 2.0,
+    //     },
+    //     Card {
+    //         sprite: Sprite {
+    //             image: asset_server.load("boss_bee.png"),
+    //             custom_size: Some(sprite_size),
+    //             ..default()
+    //         },
+    //         selectable_card: SelectableCard(false),
+    //         id: 2,
+    //         description: "test card #2".to_string(),
+    //         effect: CardEffect::DamageOverTime {
+    //             damage: 5,
+    //             duration: 3.0,
+    //             frequency: 0.5,
+    //         },
+    //         cooldown: 4.0,
+    //     },
+    // ];
 
     let screen_width = game_config.screen_width;
     let screen_height = game_config.screen_height;
     println!("Game config: {:?}", game_config);
 
-    let starting_x = 0.0 - (cards.len() / 2) as f32 * (sprite_size.x * 0.7);
+    let num_cards = random_range(1..4);
+    let starting_x = 0.0 - (num_cards / 2) as f32 * (sprite_size.x * 0.7);
+
     let mut current_x = starting_x;
     let playerbundle = spawn_player(asset_server.load("player.png"), sprite_size, screen_height);
 
@@ -288,20 +301,27 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
         ));
         // add skills
 
-        for (i, card) in cards.iter().enumerate() {
+        for i in 0..num_cards {
+            let transform = get_card_transform((i, num_cards), sprite_size, CardPosition::Top);
+            let cardeffect = CardEffect::get_random_effect();
+            let sprite = cardeffect.get_sprite_path();
+            let sprite_handle = asset_server.load(sprite);
             parent
                 .spawn((
                     Name::new(format!("Player Card {}", i)),
-                    card.sprite.clone(),
-                    card.selectable_card.clone(),
-                    Transform::from_xyz(current_x, sprite_size.y, 0.0).with_scale(Vec3::splat(1.0)),
+                    Sprite {
+                        image: sprite_handle,
+                        custom_size: Some(sprite_size),
+                        ..default()
+                    },
+                    SelectableCard(true),
+                    transform,
                     PlayerCard,
-                    CardEffect::DirectDamage(10),
+                    cardeffect,
                     CardAttackTimer(Timer::from_seconds(
                         random_range(1.0..3.0),
                         TimerMode::Repeating,
                     )),
-                    // BattleEntity,
                 ))
                 // .observe(select_card_on::<Pointer<Click>>())
                 // .observe(hover_card_on::<Pointer<Over>>())
@@ -337,27 +357,56 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
         )));
 }
 
+fn get_card_transform(
+    num_cards: (i32, i32),
+    sprite_size: Vec2,
+    position: CardPosition,
+) -> Transform {
+    let (index, total) = num_cards;
+    let card_spacing = sprite_size.x * 1.0; // Space between cards
+    let total_width = card_spacing * (total - 1) as f32;
+    let starting_x = -total_width / 2.0;
+    let current_x = starting_x + (index as f32 * card_spacing);
+
+    match position {
+        CardPosition::Top => {
+            Transform::from_xyz(current_x, sprite_size.y, 0.0).with_scale(Vec3::splat(1.0))
+        }
+        CardPosition::Bottom => {
+            Transform::from_xyz(current_x, -sprite_size.y, 0.0).with_scale(Vec3::splat(1.0))
+        }
+    }
+}
+
 fn add_card(
     parent: &mut ChildBuilder,
-    card_image: Handle<Image>,
+    // card_image: Handle<Image>,
+    asset_server: &Res<AssetServer>,
     sprite_size: Vec2,
     owner: impl Component,
+    num_cards: (i32, i32),
+    position: CardPosition,
 ) {
+    let transform = get_card_transform(num_cards, sprite_size, position);
+    let cardeffect = CardEffect::get_random_effect();
+    let sprite = match cardeffect {
+        CardEffect::DirectDamage(_) => asset_server.load("direct.png"),
+        CardEffect::DamageOverTime { .. } => asset_server.load("dot.png"),
+        CardEffect::Stun { .. } => asset_server.load("stun.png"),
+        CardEffect::Heal(_) => asset_server.load("heal.png"),
+    };
+
     parent
         .spawn((
             Name::new("Card"),
             Sprite {
-                image: card_image,
+                image: sprite,
                 custom_size: Some(sprite_size),
                 ..default()
             },
-            Transform::from_xyz(0.0, -sprite_size.y, 0.0).with_scale(Vec3::splat(1.0)),
+            transform,
             owner,
-            CardEffect::DamageOverTime {
-                damage: 10,
-                duration: 3.0,
-                frequency: 0.5,
-            },
+            cardeffect,
             CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             BattleEntity,
         ))
@@ -653,11 +702,11 @@ fn check_enemy_death(
 ) {
     let mut alive_enemies = 0;
     for (entity, enemy_health) in enemy_query.iter() {
-        match enemy_health.0 {
-            0 => {
+        match enemy_health.0.cmp(&0) {
+            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
                 commands.entity(entity).despawn_recursive();
             }
-            _ => {
+            std::cmp::Ordering::Greater => {
                 alive_enemies += 1;
             }
         }
@@ -1018,5 +1067,6 @@ fn main() {
             screen_width: 640.0,
             screen_height: 480.0,
         })
+        .register_type::<Effects>()
         .run();
 }
