@@ -264,6 +264,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
             effect: CardEffect::DamageOverTime {
                 damage: 5,
                 duration: 3.0,
+                frequency: 0.5,
             },
             cooldown: 4.0,
         },
@@ -355,6 +356,7 @@ fn add_card(
             CardEffect::DamageOverTime {
                 damage: 10,
                 duration: 3.0,
+                frequency: 0.5,
             },
             CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             BattleEntity,
@@ -471,6 +473,95 @@ fn calculate_player_damage(player_stats: &Stats, enemy_stats: &Stats) -> usize {
 #[derive(Component)]
 struct CardTimerBar;
 
+fn calculate_player_effects(
+    time: Res<Time>,
+    mut player_effect_query: Query<(&mut Effects, &mut PlayerHealth), With<PlayerEntity>>,
+) {
+    // tick each of the effect timers
+    let mut continued_effects: Vec<ActiveEffect> = vec![];
+    let Ok((mut effects, mut player_health)) = player_effect_query.get_single_mut() else {
+        println!("[calculate_effect_damage] No effects or player health found");
+        return;
+    };
+
+    for effect in effects.effects.iter_mut() {
+        match effect {
+            ActiveEffect::DamageOverTime {
+                damage,
+                duration,
+                frequency,
+            } => {
+                duration.tick(time.delta());
+                frequency.tick(time.delta());
+                if frequency.finished() {
+                    player_health.0 -= *damage;
+                    // frequency.reset();
+                }
+                if !duration.finished() {
+                    continued_effects.push(effect.clone());
+                }
+            }
+            ActiveEffect::DirectDamage(damage) => {
+                player_health.0 -= *damage;
+            }
+            ActiveEffect::Stun { duration } => {
+                duration.tick(time.delta());
+                if !duration.finished() {
+                    continued_effects.push(effect.clone());
+                }
+            }
+            ActiveEffect::Heal(heal) => {
+                player_health.0 += *heal;
+            }
+        }
+    }
+    effects.effects = continued_effects;
+}
+fn calculate_enemy_effects(
+    time: Res<Time>,
+    mut enemy_effect_query: Query<(&mut Effects, &mut EnemyHealth), With<EnemyEntity>>,
+) {
+    // tick each of the effect timers
+    let mut continued_effects: Vec<ActiveEffect> = vec![];
+    let Ok((mut effects, mut enemy_health)) = enemy_effect_query.get_single_mut() else {
+        println!("[calculate_enemy_effects] No effects or enemy health found");
+        return;
+    };
+
+    for effect in effects.effects.iter_mut() {
+        match effect {
+            ActiveEffect::DamageOverTime {
+                damage,
+                duration,
+                frequency,
+            } => {
+                duration.tick(time.delta());
+                frequency.tick(time.delta());
+                if frequency.finished() {
+                    enemy_health.0 -= *damage;
+                    // frequency.reset();
+                }
+                if !duration.finished() {
+                    continued_effects.push(effect.clone());
+                }
+            }
+            ActiveEffect::DirectDamage(damage) => {
+                enemy_health.0 -= *damage;
+            }
+            ActiveEffect::Stun { duration } => {
+                duration.tick(time.delta());
+                if !duration.finished() {
+                    continued_effects.push(effect.clone());
+                }
+            }
+            ActiveEffect::Heal(heal) => {
+                enemy_health.0 += *heal;
+            }
+        }
+    }
+    effects.effects = continued_effects;
+}
+
 fn enemy_auto_attack(
     time: Res<Time>,
     mut enemy_cards_query: Query<(&mut CardAttackTimer, &CardEffect), With<EnemyCard>>,
@@ -486,10 +577,15 @@ fn enemy_auto_attack(
             };
 
             match effect {
-                CardEffect::DamageOverTime { damage, duration } => {
+                CardEffect::DamageOverTime {
+                    damage,
+                    duration,
+                    frequency,
+                } => {
                     effects.effects.push(ActiveEffect::DamageOverTime {
                         damage: *damage,
                         duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                        frequency: Timer::from_seconds(*frequency, TimerMode::Repeating),
                     });
                 }
                 CardEffect::DirectDamage(damage) => {
@@ -523,10 +619,15 @@ fn player_auto_attack(
             };
 
             match effect {
-                CardEffect::DamageOverTime { damage, duration } => {
+                CardEffect::DamageOverTime {
+                    damage,
+                    duration,
+                    frequency,
+                } => {
                     effects.effects.push(ActiveEffect::DamageOverTime {
                         damage: *damage,
                         duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                        frequency: Timer::from_seconds(*frequency, TimerMode::Repeating),
                     });
                 }
                 CardEffect::DirectDamage(damage) => {
@@ -890,6 +991,8 @@ fn main() {
                 update_skill_timer_bars,
                 enemy_auto_attack,
                 player_auto_attack,
+                calculate_player_effects,
+                calculate_enemy_effects,
                 // enemy_skill_auto_attack,
                 check_enemy_death,
                 // handle_inventory_button,

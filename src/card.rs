@@ -7,16 +7,28 @@ pub mod card {
     #[derive(Component, Clone)]
     pub enum CardEffect {
         DirectDamage(usize),
-        DamageOverTime { damage: usize, duration: f32 },
-        Stun { duration: f32 },
+        DamageOverTime {
+            damage: usize,
+            duration: f32,
+            frequency: f32,
+        },
+        Stun {
+            duration: f32,
+        },
         Heal(usize),
     }
 
     #[derive(Component, Clone)]
     pub enum ActiveEffect {
         DirectDamage(usize),
-        DamageOverTime { damage: usize, duration: Timer },
-        Stun { duration: Timer },
+        DamageOverTime {
+            damage: usize,
+            duration: Timer,
+            frequency: Timer,
+        },
+        Stun {
+            duration: Timer,
+        },
         Heal(usize),
     }
 
