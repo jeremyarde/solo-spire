@@ -3,6 +3,7 @@
 
 use bevy::{prelude::*, state::commands, ui::Interaction, window::WindowResolution};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use card::card::{ActiveEffect, CardEffect, Effects};
 use rand::random_range;
 use skills::skills::{Class, Stats};
 use std::fmt::Debug;
@@ -113,6 +114,7 @@ struct EnemyBundle {
     transform: Transform,
     enemy_health: EnemyHealth,
     stats: Stats,
+    effects: Effects,
 }
 
 fn on_enter_battle(
@@ -165,6 +167,9 @@ fn spawn_new_enemy(image: Handle<Image>, game_config: &GameConfig) -> EnemyBundl
             perception: 10,
             intelligence: 10,
         },
+        effects: Effects {
+            effects: Vec::new(),
+        },
     };
 
     enemy
@@ -203,6 +208,7 @@ struct PlayerCard;
 
 #[derive(Component, Clone)]
 struct EnemyCard;
+
 #[derive(Component, Clone)]
 
 struct Card {
@@ -210,10 +216,9 @@ struct Card {
     selectable_card: SelectableCard,
     id: usize,
     description: String,
+    effect: CardEffect,
+    cooldown: f32,
 }
-
-#[derive(Component, Clone)]
-struct Damage(usize);
 
 #[derive(Component)]
 struct DeckPile;
@@ -244,6 +249,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
             selectable_card: SelectableCard(false),
             id: 1,
             description: "This is test card #1".to_string(),
+            effect: CardEffect::DirectDamage(10),
+            cooldown: 2.0,
         },
         Card {
             sprite: Sprite {
@@ -254,6 +261,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
             selectable_card: SelectableCard(false),
             id: 2,
             description: "test card #2".to_string(),
+            effect: CardEffect::DamageOverTime {
+                damage: 5,
+                duration: 3.0,
+            },
+            cooldown: 4.0,
         },
     ];
 
@@ -283,7 +295,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                     card.selectable_card.clone(),
                     Transform::from_xyz(current_x, sprite_size.y, 0.0).with_scale(Vec3::splat(1.0)),
                     PlayerCard,
-                    Damage(10),
+                    CardEffect::DirectDamage(10),
                     CardAttackTimer(Timer::from_seconds(
                         random_range(1.0..3.0),
                         TimerMode::Repeating,
@@ -291,8 +303,8 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                     // BattleEntity,
                 ))
                 // .observe(select_card_on::<Pointer<Click>>())
-                .observe(hover_card_on::<Pointer<Over>>())
-                .observe(hover_card_out::<Pointer<Out>>())
+                // .observe(hover_card_on::<Pointer<Over>>())
+                // .observe(hover_card_out::<Pointer<Out>>())
                 .with_children(|parent| {
                     add_timer_bar(parent);
                 });
@@ -340,7 +352,10 @@ fn add_card(
             },
             Transform::from_xyz(0.0, -sprite_size.y, 0.0).with_scale(Vec3::splat(1.0)),
             owner,
-            Damage(10),
+            CardEffect::DamageOverTime {
+                damage: 10,
+                duration: 3.0,
+            },
             CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
             BattleEntity,
         ))
@@ -378,6 +393,7 @@ struct PlayerBundle {
     player_health: PlayerHealth,
     stats: Stats,
     class: Class,
+    effects: Effects,
 }
 
 fn spawn_player(image: Handle<Image>, sprite_size: Vec2, screen_height: f32) -> PlayerBundle {
@@ -401,6 +417,9 @@ fn spawn_player(image: Handle<Image>, sprite_size: Vec2, screen_height: f32) -> 
             intelligence: 10,
         },
         class: Class::Warrior,
+        effects: Effects {
+            effects: Vec::new(),
+        },
     };
 
     player
@@ -415,43 +434,6 @@ fn change_sprite_color<E: Debug + Clone + Reflect>(
         };
         sprite.color = color;
     }
-}
-
-fn hover_card_on<E: Debug + Clone + Reflect>(
-) -> impl Fn(Trigger<E>, Query<(&mut Transform, &mut SelectableCard, &Damage)>) {
-    move |ev, (mut sprites)| {
-        let Ok((mut transform, mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
-            println!("No selectable card found");
-            return;
-        };
-        transform.translation.y += 10.0;
-    }
-}
-
-fn hover_card_out<E: Debug + Clone + Reflect>(
-) -> impl Fn(Trigger<E>, Query<(&mut Transform, &mut SelectableCard, &Damage)>) {
-    move |ev, (mut sprites)| {
-        let Ok((mut transform, mut selectable_card, damage)) = sprites.get_mut(ev.entity()) else {
-            println!("No selectable card found");
-            return;
-        };
-        transform.translation.y -= 10.0;
-    }
-}
-
-fn calculate_damage(player_stats: &Stats, enemy_stats: &Stats, damage: usize) -> usize {
-    let player_strength = player_stats.strength;
-    let enemy_agility = enemy_stats.agility;
-
-    let dodge_chance: f32 = (player_stats.agility as f32 / enemy_stats.agility as f32) * 0.5;
-    println!("Dodge chance: {}", dodge_chance);
-    if rand::random::<f32>() < dodge_chance {
-        println!("Dodge!");
-        return 0;
-    }
-
-    let total_damage = damage * player_strength / enemy_agility;
-    total_damage
 }
 
 fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
@@ -491,64 +473,74 @@ struct CardTimerBar;
 
 fn enemy_auto_attack(
     time: Res<Time>,
-    mut enemy_cards_query: Query<(&mut CardAttackTimer), With<EnemyCard>>,
-    mut player_query: Query<(&mut PlayerHealth, &Stats), With<PlayerEntity>>,
-    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyEntity>>,
+    mut enemy_cards_query: Query<(&mut CardAttackTimer, &CardEffect), With<EnemyCard>>,
+    mut player_query: Query<(&mut Effects), With<PlayerEntity>>,
 ) {
-    let Ok((mut player_health, player_stats)) = player_query.get_single_mut().map_err(|err| {
-        println!("[enemy_auto_attack] No player found: {:?}", err);
-        return;
-    }) else {
-        println!("[enemy_auto_attack] No player found");
-        return;
-    };
-    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut().map_err(|err| {
-        println!("[enemy_auto_attack] No enemy found: {:?}", err);
-        return;
-    }) else {
-        println!("[enemy_auto_attack] No enemy found");
-        return;
-    };
-
-    for (mut timer) in enemy_cards_query.iter_mut() {
+    for (mut timer, effect) in enemy_cards_query.iter_mut() {
         timer.0.tick(time.delta());
         if timer.0.finished() {
             println!("attack ready");
-            let damage = calculate_enemy_damage(&enemy_stats, &player_stats);
-            player_health.0 = player_health.0.saturating_sub(damage);
-            println!(
-                "Enemy auto-attacks for {} damage! Player health: {}",
-                damage, player_health.0
-            );
+            let Ok((mut effects)) = player_query.get_single_mut() else {
+                println!("[enemy_auto_attack] No player found");
+                return;
+            };
+
+            match effect {
+                CardEffect::DamageOverTime { damage, duration } => {
+                    effects.effects.push(ActiveEffect::DamageOverTime {
+                        damage: *damage,
+                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                    });
+                }
+                CardEffect::DirectDamage(damage) => {
+                    effects.effects.push(ActiveEffect::DirectDamage(*damage));
+                }
+                CardEffect::Stun { duration } => {
+                    effects.effects.push(ActiveEffect::Stun {
+                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                    });
+                }
+                CardEffect::Heal(heal) => {
+                    effects.effects.push(ActiveEffect::Heal(*heal));
+                }
+            }
         }
     }
 }
 
 fn player_auto_attack(
     time: Res<Time>,
-    mut player_cards_query: Query<(&mut CardAttackTimer), With<PlayerCard>>,
-    mut enemy_query: Query<(&mut EnemyHealth, &Stats), With<EnemyEntity>>,
-    mut player_stats_query: Query<&Stats, With<PlayerHealth>>,
+    mut player_cards_query: Query<(&mut CardAttackTimer, &CardEffect), With<PlayerCard>>,
+    mut enemy_query: Query<(&mut Effects), With<EnemyEntity>>,
 ) {
-    let Ok((mut enemy_health, enemy_stats)) = enemy_query.get_single_mut() else {
-        println!("[player_auto_attack] No enemy found");
-        return;
-    };
-    let Ok(player_stats) = player_stats_query.get_single() else {
-        println!("[player_auto_attack] No player stats found");
-        return;
-    };
-
-    for (mut timer) in player_cards_query.iter_mut() {
+    for (mut timer, effect) in player_cards_query.iter_mut() {
         timer.0.tick(time.delta());
-        // println!("player_auto_attack: timer: {:?}", timer.0.elapsed_secs());
         if timer.0.finished() {
-            let damage = calculate_player_damage(&player_stats, &enemy_stats);
-            enemy_health.0 = enemy_health.0.saturating_sub(damage);
-            println!(
-                "Player auto-attacks for {} damage! Enemy health: {}",
-                damage, enemy_health.0
-            );
+            // println!("attack ready");
+            let Ok((mut effects)) = enemy_query.get_single_mut() else {
+                println!("[player_auto_attack] No enemy found");
+                return;
+            };
+
+            match effect {
+                CardEffect::DamageOverTime { damage, duration } => {
+                    effects.effects.push(ActiveEffect::DamageOverTime {
+                        damage: *damage,
+                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                    });
+                }
+                CardEffect::DirectDamage(damage) => {
+                    effects.effects.push(ActiveEffect::DirectDamage(*damage));
+                }
+                CardEffect::Stun { duration } => {
+                    effects.effects.push(ActiveEffect::Stun {
+                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                    });
+                }
+                CardEffect::Heal(heal) => {
+                    effects.effects.push(ActiveEffect::Heal(*heal));
+                }
+            }
         }
     }
 }
@@ -810,6 +802,12 @@ fn update_skill_timer_bars(
     }
 }
 
+fn update_card_timers(mut card_query: Query<&mut CardAttackTimer>, time: Res<Time>) {
+    for mut attack_timer in card_query.iter_mut() {
+        attack_timer.0.tick(time.delta());
+    }
+}
+
 fn despawn_battle_entities(
     mut commands: Commands,
     battle_entity_query: Query<Entity, With<BattleEntity>>,
@@ -840,11 +838,11 @@ fn handle_inventory_scroll(
             scroll_direction -= 1.0;
         }
 
-        println!("scroll_direction: {}", scroll_direction);
+        // println!("scroll_direction: {}", scroll_direction);
         if scroll_direction != 0.0 {
             // Update scroll offset
             scroll.offset += scroll_direction * SCROLL_SPEED * time.delta().as_secs_f32();
-            println!("scroll.offset: {}", scroll.offset);
+            // println!("scroll.offset: {}", scroll.offset);
             scroll.offset = scroll.offset.clamp(0.0, scroll.max_offset);
 
             // Update item positions
@@ -888,6 +886,7 @@ fn main() {
             (
                 update_enemy_health,
                 update_player_health,
+                update_card_timers,
                 update_skill_timer_bars,
                 enemy_auto_attack,
                 player_auto_attack,
