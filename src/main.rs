@@ -844,13 +844,18 @@ fn handle_inventory_scroll(
         if scroll_direction != 0.0 {
             // Update scroll offset
             scroll.offset += scroll_direction * SCROLL_SPEED * time.delta().as_secs_f32();
+            println!("scroll.offset: {}", scroll.offset);
             scroll.offset = scroll.offset.clamp(0.0, scroll.max_offset);
 
             // Update item positions
             for child in children.iter() {
                 if let Ok(mut transform) = item_query.get_mut(*child) {
                     let original_y = transform.translation.y;
-                    transform.translation.y = original_y + scroll.offset;
+                    if scroll_direction > 0.0 {
+                        transform.translation.y = original_y + scroll.offset;
+                    } else {
+                        transform.translation.y = original_y - scroll.offset;
+                    }
                 }
             }
         }
