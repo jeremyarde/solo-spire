@@ -1,13 +1,7 @@
 //! Demonstrates picking for sprites and sprite atlases. The picking backend only tests against the
 //! sprite bounds, so the sprite atlas can be picked by clicking on its transparent areas.
 
-use bevy::{
-    prelude::*,
-    sprite::{self, Anchor},
-    state::commands,
-    ui::Interaction,
-    window::WindowResolution,
-};
+use bevy::{prelude::*, state::commands, ui::Interaction, window::WindowResolution};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use rand::random_range;
 use skills::skills::{Class, Stats};
@@ -15,6 +9,11 @@ use std::fmt::Debug;
 
 mod card;
 mod skills;
+
+const MENU_ALPHA: f32 = 0.8;
+const INVENTORY_ITEM_HEIGHT: f32 = 50.0;
+const INVENTORY_VISIBLE_ITEMS: f32 = 8.0; // Number of items visible at once
+const SCROLL_SPEED: f32 = 20.0;
 
 #[derive(Resource, Debug, Default)]
 struct GameConfig {
@@ -43,6 +42,8 @@ enum GameState {
     #[default]
     Battle,
     LootScreen,
+    Menu,
+    EndBattle,
 }
 
 #[derive(Component, Clone)]
@@ -61,17 +62,17 @@ enum LootRarity {
 impl LootRarity {
     fn get_color(&self) -> Color {
         match self {
-            LootRarity::Common => Color::WHITE,
-            LootRarity::Rare => Color::srgb(0.0, 0.5, 1.0),
-            LootRarity::Epic => Color::srgb(0.8, 0.0, 0.8),
+            LootRarity::Common => Color::rgba(0.8, 0.8, 0.8, 0.7),
+            LootRarity::Rare => Color::rgba(0.0, 0.5, 1.0, 0.7),
+            LootRarity::Epic => Color::rgba(0.8, 0.0, 0.8, 0.7),
         }
     }
 
     fn get_text_color(&self) -> Color {
         match self {
-            LootRarity::Common => Color::BLACK,
+            LootRarity::Common => Color::rgb(0.2, 0.2, 0.2),
             LootRarity::Rare => Color::WHITE,
-            LootRarity::Epic => Color::WHITE,
+            LootRarity::Epic => Color::rgb(1.0, 0.9, 0.0),
         }
     }
 }
@@ -118,7 +119,12 @@ fn on_enter_battle(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     game_config: Res<GameConfig>,
+    enemy_query: Query<Entity, With<EnemyEntity>>,
 ) {
+    if let Ok(enemy) = enemy_query.get_single() {
+        println!("Enemy already exists");
+        return;
+    }
     let enemybundle = spawn_new_enemy(asset_server.load("boss_bee.png"), &game_config);
     let enemyid = commands.spawn(enemybundle).id();
 
@@ -315,8 +321,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
         })
         .observe(change_sprite_color::<Pointer<Out>>(Color::srgb(
             0.0, 0.7, 0.5,
-        )))
-        .observe(handle_inventory_button::<Pointer<Click>>());
+        )));
 }
 
 fn add_card(
@@ -453,7 +458,8 @@ fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
     let enemy_strength = enemy_stats.strength;
     let player_agility = player_stats.agility;
 
-    let dodge_chance: f32 = (player_stats.agility as f32 / enemy_stats.agility as f32) * 0.5;
+    let dodge_chance: f32 = (player_stats.agility as f32 / enemy_stats.agility as f32) * 0.1;
+    println!("Enemy dodge chance: {}", dodge_chance);
     if rand::random::<f32>() < dodge_chance {
         println!("Player dodged the attack!");
         return 0;
@@ -468,7 +474,8 @@ fn calculate_player_damage(player_stats: &Stats, enemy_stats: &Stats) -> usize {
     let player_strength = player_stats.strength;
     let enemy_agility = enemy_stats.agility;
 
-    let dodge_chance: f32 = (enemy_stats.agility as f32 / player_stats.agility as f32) * 0.5;
+    let dodge_chance: f32 = (enemy_stats.agility as f32 / player_stats.agility as f32) * 0.1;
+    println!("Player dodge chance: {}", dodge_chance);
     if rand::random::<f32>() < dodge_chance {
         println!("Enemy dodged the attack!");
         return 0;
@@ -551,11 +558,19 @@ fn check_enemy_death(
     mut next_state: ResMut<NextState<GameState>>,
     mut commands: Commands,
 ) {
-    if let Ok((entity, enemy_health)) = enemy_query.get_single() {
-        if enemy_health.0 == 0 {
-            next_state.set(GameState::LootScreen);
-            commands.entity(entity).despawn_recursive();
+    let mut alive_enemies = 0;
+    for (entity, enemy_health) in enemy_query.iter() {
+        match enemy_health.0 {
+            0 => {
+                commands.entity(entity).despawn_recursive();
+            }
+            _ => {
+                alive_enemies += 1;
+            }
         }
+    }
+    if alive_enemies == 0 {
+        next_state.set(GameState::LootScreen);
     }
 }
 
@@ -569,20 +584,26 @@ fn despawn_loot_screen(mut commands: Commands, loot_screen_query: Query<Entity, 
 }
 
 fn spawn_loot_screen(mut commands: Commands, game_config: Res<GameConfig>) {
-    let loot_items = vec![
-        LootItem {
-            name: "Health Potion".to_string(),
-            rarity: LootRarity::Common,
-        },
-        LootItem {
-            name: "Magic Sword".to_string(),
-            rarity: LootRarity::Rare,
-        },
-        LootItem {
-            name: "Ancient Relic".to_string(),
-            rarity: LootRarity::Epic,
-        },
-    ];
+    let loot_items = (0..10)
+        .map(|i| {
+            let rand_rarity = random_range(0..3);
+            let rarity = match rand_rarity {
+                0 => LootRarity::Common,
+                1 => LootRarity::Rare,
+                _ => LootRarity::Epic,
+            };
+            let rand_item = random_range(0..3);
+            let item = match rand_item {
+                0 => "Health Potion",
+                1 => "Magic Sword",
+                _ => "Ancient Relic",
+            };
+            LootItem {
+                name: format!("{}", item),
+                rarity,
+            }
+        })
+        .collect::<Vec<_>>();
 
     // Spawn background overlay
     let parent = commands
@@ -647,66 +668,100 @@ fn spawn_loot_screen(mut commands: Commands, game_config: Res<GameConfig>) {
     }
 }
 
-fn handle_inventory_button<E: Debug + Clone + Reflect>() -> impl Fn(
-    Trigger<E>,
-    (
-        Query<(&Transform), With<InventoryDisplay>>,
-        Res<Inventory>,
-        Commands,
-    ),
+#[derive(Component)]
+enum GameMenu {
+    Inventory,
+    Loot,
+}
+
+fn toggle_ui(
+    input: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    current_state: Res<State<GameState>>,
 ) {
-    println!("handle_inventory_button triggered");
-    // display inventory
-    move |ev, (inventory_display_query, inventory, mut commands)| {
-        let Ok(transform) = inventory_display_query.get_single() else {
-            println!("[handle_inventory_button] No inventory display found");
-            return;
-        };
-        spawn_inventory_display(&mut commands, &transform, &inventory);
+    if input.just_pressed(KeyCode::KeyI) {
+        if current_state.get() == &GameState::Battle {
+            next_state.set(GameState::Menu);
+        } else {
+            next_state.set(GameState::Battle);
+        }
     }
 }
 
-fn spawn_inventory_display(
-    commands: &mut Commands,
-    button_transform: &Transform,
-    inventory: &Inventory,
-) {
-    let display_entity = commands
+#[derive(Component)]
+struct InventoryScroll {
+    offset: f32,
+    max_offset: f32,
+}
+
+fn spawn_menu(mut commands: Commands, resource: Res<Inventory>, game_config: Res<GameConfig>) {
+    let total_items = resource.items.len() as f32;
+    let max_scroll =
+        (total_items * INVENTORY_ITEM_HEIGHT) - (INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT);
+    let max_scroll = max_scroll.max(0.0); // Don't allow negative scroll range
+
+    // Background panel
+    commands
         .spawn((
             Sprite {
-                color: Color::rgba(0.0, 0.0, 0.0, 0.8),
-                custom_size: Some(Vec2::new(200.0, inventory.items.len() as f32 * 30.0 + 20.0)),
+                color: Color::srgba(0.0, 0.0, 0.0, 0.9),
+                custom_size: Some(Vec2::new(
+                    game_config.screen_width * 0.4,
+                    INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT, // Fixed height based on visible items
+                )),
                 ..default()
             },
-            Transform::from_xyz(
-                button_transform.translation.x + 120.0,
-                button_transform.translation.y - 20.0,
-                0.95,
-            ),
+            Transform::from_xyz(0.0, 0.0, 0.9),
             InventoryDisplay,
+            InventoryScroll {
+                offset: 0.0,
+                max_offset: max_scroll,
+            },
+            Visibility::default(),
+            GameMenu::Inventory,
         ))
-        .id();
+        .with_children(|parent| {
+            // Title (above the scroll area)
+            parent.spawn((
+                Text2d::new("Inventory"),
+                TextColor(Color::WHITE),
+                Transform::from_xyz(
+                    0.0,
+                    INVENTORY_VISIBLE_ITEMS * INVENTORY_ITEM_HEIGHT / 2.0 + 20.0,
+                    0.1,
+                ),
+            ));
 
-    // Spawn items in inventory
-    for (i, item) in inventory.items.iter().enumerate() {
-        commands.entity(display_entity).with_children(|parent| {
-            parent
-                .spawn((
-                    Sprite {
-                        color: item.rarity.get_color(),
-                        custom_size: Some(Vec2::new(180.0, 25.0)),
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, -(i as f32 * 30.0 + 10.0), 0.1),
-                ))
-                .with_children(|parent| {
-                    parent.spawn((
-                        Text2d::new(&item.name),
-                        TextColor(item.rarity.get_text_color()),
-                        Transform::from_xyz(0.0, 0.0, 0.1),
-                    ));
-                });
+            // Items container
+            for (i, item) in resource.items.iter().enumerate() {
+                let y_offset = -((i as f32) * INVENTORY_ITEM_HEIGHT);
+
+                parent
+                    .spawn((
+                        Sprite {
+                            color: item.rarity.get_color(),
+                            custom_size: Some(Vec2::new(
+                                game_config.screen_width * 0.35,
+                                INVENTORY_ITEM_HEIGHT - 10.0, // Leave some spacing
+                            )),
+                            ..default()
+                        },
+                        Transform::from_xyz(0.0, y_offset, 0.1),
+                    ))
+                    .with_children(|item_parent| {
+                        item_parent.spawn((
+                            Text2d::new(&item.name),
+                            TextColor(item.rarity.get_text_color()),
+                            Transform::from_xyz(-game_config.screen_width * 0.15, 0.0, 0.1),
+                        ));
+                    });
+            }
         });
+}
+
+fn despawn_menu(mut commands: Commands, menu_query: Query<Entity, With<GameMenu>>) {
+    if let Ok(menu) = menu_query.get_single() {
+        commands.entity(menu).despawn_recursive();
     }
 }
 
@@ -769,6 +824,39 @@ fn despawn_battle_entities(
     }
 }
 
+fn handle_inventory_scroll(
+    mut scroll_query: Query<(&mut InventoryScroll, &Children)>,
+    mut item_query: Query<&mut Transform>,
+    input: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+) {
+    for (mut scroll, children) in scroll_query.iter_mut() {
+        let mut scroll_direction = 0.0;
+
+        if input.pressed(KeyCode::ArrowUp) {
+            scroll_direction += 1.0;
+        }
+        if input.pressed(KeyCode::ArrowDown) {
+            scroll_direction -= 1.0;
+        }
+
+        println!("scroll_direction: {}", scroll_direction);
+        if scroll_direction != 0.0 {
+            // Update scroll offset
+            scroll.offset += scroll_direction * SCROLL_SPEED * time.delta().as_secs_f32();
+            scroll.offset = scroll.offset.clamp(0.0, scroll.max_offset);
+
+            // Update item positions
+            for child in children.iter() {
+                if let Ok(mut transform) = item_query.get_mut(*child) {
+                    let original_y = transform.translation.y;
+                    transform.translation.y = original_y + scroll.offset;
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -805,11 +893,20 @@ fn main() {
                 .chain()
                 .run_if(in_state(GameState::Battle)),
         )
-        .add_systems(Update, debug_display_state)
+        .add_systems(Update, (debug_display_state, toggle_ui))
         .add_systems(OnEnter(GameState::Battle), on_enter_battle)
-        .add_systems(OnEnter(GameState::LootScreen), spawn_loot_screen)
-        .add_systems(OnExit(GameState::Battle), despawn_battle_entities)
+        .add_systems(
+            OnEnter(GameState::LootScreen),
+            (despawn_battle_entities, spawn_loot_screen).chain(),
+        )
+        // .add_systems(OnEnter(GameState::EndBattle), despawn_battle_entities)
         .add_systems(OnExit(GameState::LootScreen), despawn_loot_screen)
+        .add_systems(OnEnter(GameState::Menu), spawn_menu)
+        .add_systems(OnExit(GameState::Menu), despawn_menu)
+        .add_systems(
+            Update,
+            handle_inventory_scroll.run_if(in_state(GameState::Menu)),
+        )
         .insert_resource(GameConfig {
             screen_width: 640.0,
             screen_height: 480.0,
