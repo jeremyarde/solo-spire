@@ -23,16 +23,16 @@ struct GameConfig {
     screen_height: f32,
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 struct EnemyHealth(i32);
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 struct PlayerHealth(i32);
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 struct PlayerEntity;
 
-#[derive(Component, Deref, DerefMut)]
+#[derive(Component, Deref, DerefMut, Reflect)]
 struct CardAttackTimer(Timer);
 
 pub const RED: Color = Color::srgb(1.0, 0.0, 0.0);
@@ -49,13 +49,13 @@ enum GameState {
     GameOver,
 }
 
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Reflect)]
 struct LootItem {
     name: String,
     rarity: LootRarity,
 }
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, Reflect)]
 enum LootRarity {
     Common,
     Rare,
@@ -105,7 +105,7 @@ fn debug_display_state(state: Res<State<GameState>>, input: Res<ButtonInput<KeyC
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 struct EnemyEntity;
 
 #[derive(Bundle)]
@@ -488,7 +488,7 @@ fn spawn_player(image: Handle<Image>, sprite_size: Vec2, screen_height: f32) -> 
         },
         transform: Transform::from_xyz(0.0, -screen_height / 2.0 + sprite_size.y, 0.1)
             .with_scale(Vec3::splat(1.0)),
-        player_health: PlayerHealth(0),
+        player_health: PlayerHealth(100),
         stats: Stats {
             strength: 20,
             agility: 10,
@@ -514,38 +514,6 @@ fn change_sprite_color<E: Debug + Clone + Reflect>(
         };
         sprite.color = color;
     }
-}
-
-fn calculate_enemy_damage(enemy_stats: &Stats, player_stats: &Stats) -> usize {
-    let enemy_strength = enemy_stats.strength;
-    let player_agility = player_stats.agility;
-
-    let dodge_chance: f32 = (player_stats.agility as f32 / enemy_stats.agility as f32) * 0.1;
-    println!("Enemy dodge chance: {}", dodge_chance);
-    if rand::random::<f32>() < dodge_chance {
-        println!("Player dodged the attack!");
-        return 0;
-    }
-
-    let base_damage = 5; // Base damage for enemy attacks
-    let total_damage = base_damage * enemy_strength / player_agility;
-    total_damage
-}
-
-fn calculate_player_damage(player_stats: &Stats, enemy_stats: &Stats) -> usize {
-    let player_strength = player_stats.strength;
-    let enemy_agility = enemy_stats.agility;
-
-    let dodge_chance: f32 = (enemy_stats.agility as f32 / player_stats.agility as f32) * 0.1;
-    println!("Player dodge chance: {}", dodge_chance);
-    if rand::random::<f32>() < dodge_chance {
-        println!("Enemy dodged the attack!");
-        return 0;
-    }
-
-    let base_damage = 5; // Base damage for player attacks
-    let total_damage = base_damage * player_strength / enemy_agility;
-    total_damage
 }
 
 #[derive(Component)]
@@ -743,7 +711,7 @@ fn player_auto_attack(
         With<PlayerCard>,
     >,
     mut effect_queries: ParamSet<(
-        Query<&Effects, With<PlayerEntity>>,
+        Query<&mut Effects, With<PlayerEntity>>,
         Query<&mut Effects, With<EnemyEntity>>,
     )>,
 ) {
@@ -770,11 +738,8 @@ fn player_auto_attack(
         if timer.0.finished() {
             animation.state = CardAnimationState::MovingUp;
 
-            let mut enemy_effects = effect_queries.p1();
-            let Ok(mut effects) = enemy_effects.get_single_mut() else {
-                println!("[player_auto_attack] No enemy found");
-                return;
-            };
+            let mut player_effects = vec![];
+            let mut enemy_effects = vec![];
 
             match effect {
                 CardEffect::DamageOverTime {
@@ -782,23 +747,41 @@ fn player_auto_attack(
                     duration,
                     frequency,
                 } => {
-                    effects.effects.push(ActiveEffect::DamageOverTime {
+                    enemy_effects.push(ActiveEffect::DamageOverTime {
                         damage: *damage,
                         duration: Timer::from_seconds(*duration, TimerMode::Once),
                         frequency: Timer::from_seconds(*frequency, TimerMode::Repeating),
                     });
                 }
                 CardEffect::DirectDamage(damage) => {
-                    effects.effects.push(ActiveEffect::DirectDamage(*damage));
+                    enemy_effects.push(ActiveEffect::DirectDamage(*damage));
                 }
                 CardEffect::Stun { duration } => {
-                    effects.effects.push(ActiveEffect::Stun {
+                    enemy_effects.push(ActiveEffect::Stun {
                         duration: Timer::from_seconds(*duration, TimerMode::Once),
                     });
                 }
                 CardEffect::Heal(heal) => {
-                    effects.effects.push(ActiveEffect::Heal(*heal));
+                    player_effects.push(ActiveEffect::Heal(*heal));
                 }
+            }
+
+            for effect in player_effects {
+                let mut player_effects_query = effect_queries.p0();
+                let Ok(mut player_effects) = player_effects_query.get_single_mut() else {
+                    println!("[player_auto_attack] No player effects found");
+                    return;
+                };
+                player_effects.effects.push(effect);
+            }
+
+            for effect in enemy_effects {
+                let mut enemy_effects_query = effect_queries.p1();
+                let Ok(mut enemy_effects) = enemy_effects_query.get_single_mut() else {
+                    println!("[player_auto_attack] No enemy found");
+                    return;
+                };
+                enemy_effects.effects.push(effect);
             }
         }
     }
@@ -833,7 +816,7 @@ fn check_player_death(
     for (entity, player_health) in player_query.iter() {
         match player_health.0.cmp(&0) {
             std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                commands.entity(entity).despawn_recursive();
+                // commands.entity(entity).despawn_recursive();
             }
             std::cmp::Ordering::Greater => {
                 alive_players += 1;
@@ -1239,6 +1222,7 @@ fn show_game_over(mut commands: Commands, game_config: Res<GameConfig>) {
                 ..default()
             },
             Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER),
+            MenuItem,
         ))
         .with_children(|parent| {
             parent
@@ -1250,38 +1234,48 @@ fn show_game_over(mut commands: Commands, game_config: Res<GameConfig>) {
                     },
                     Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.1),
                 ))
+                .with_child((
+                    Text2d::new("New run"),
+                    TextColor(Color::WHITE),
+                    Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.2),
+                ))
                 .observe(recolor_on::<Pointer<Over>>(Color::srgb(0.8, 0.8, 0.8)))
                 .observe(recolor_on::<Pointer<Out>>(Color::srgb(0.3, 0.2, 0.8)))
-                .observe(respawn_on::<Pointer<Down>>(Vec2::new(10.0, -10.0)))
-                .observe(respawn_on::<Pointer<Up>>(Vec2::new(-10.0, 10.0)));
-
-            parent.spawn((
-                Text2d::new("New run"),
-                TextColor(Color::WHITE),
-                Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.2),
-            ));
+                .observe(translate_on::<Pointer<Down>>(Vec2::new(10.0, -10.0)))
+                .observe(translate_on::<Pointer<Up>>(Vec2::new(-10.0, 10.0)))
+                .observe(respawn_on::<Pointer<Click>>(Vec2::new(-10.0, 10.0)));
         });
-    // .with_children(|parent| {
-    //     parent.spawn((
-    //         Text2d::new("Game Over"),
-    //         TextColor(Color::WHITE),
-    //         Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.1),
-    //     ));
-
-    //     parent
-    //         .spawn((
-    //             Name::new("Game Over Text"),
-    //             Text2d::new("New run"),
-    //             TextColor(Color::WHITE),
-    //             Transform::from_xyz(0.0, -30.0, MENU_Z_LAYER + 0.2),
-    //         ))
-    //         .observe(recolor_on::<Pointer<Over>>(Color::srgb(0.8, 0.8, 0.8)))
-    //         .observe(recolor_on::<Pointer<Out>>(Color::srgb(0.3, 0.2, 0.8)));
-    //     // .observe(respawn_on::<Pointer<Click>>());
-    // });
 }
 
+#[derive(Component)]
+struct MenuItem;
+
 fn respawn_on<E: Debug + Clone + Reflect>(
+    direction: Vec2,
+) -> impl Fn(
+    Trigger<E>,
+    (
+        Commands,
+        ResMut<NextState<GameState>>,
+        Query<&mut PlayerHealth>,
+        Query<Entity, With<MenuItem>>,
+    ),
+) {
+    println!("respawn_on");
+    move |ev, (mut commands, mut next_state, mut player_health, mut menu_entity)| {
+        println!("respawn_on end");
+        // commands.entity(ev.entity()).despawn_recursive();
+        if let Ok(mut player_health) = player_health.get_mut(ev.entity()) {
+            player_health.0 = 100;
+        }
+        next_state.set(GameState::Battle);
+        if let Ok(menu_entity) = menu_entity.get_single() {
+            commands.entity(menu_entity).despawn_recursive();
+        }
+    }
+}
+
+fn translate_on<E: Debug + Clone + Reflect>(
     direction: Vec2,
 ) -> impl Fn(Trigger<E>, (Query<&mut Transform>)) {
     // println!("respawn_on");
@@ -1364,5 +1358,10 @@ fn main() {
             screen_height: 480.0,
         })
         .register_type::<Effects>()
+        .register_type::<ActiveEffect>()
+        .register_type::<PlayerHealth>()
+        .register_type::<EnemyHealth>()
+        .register_type::<PlayerEntity>()
+        .register_type::<EnemyEntity>()
         .run();
 }
