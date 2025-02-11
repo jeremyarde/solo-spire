@@ -12,6 +12,7 @@ mod card;
 mod skills;
 
 const MENU_ALPHA: f32 = 0.8;
+const MENU_Z_LAYER: f32 = 1.1;
 const INVENTORY_ITEM_HEIGHT: f32 = 50.0;
 const INVENTORY_VISIBLE_ITEMS: f32 = 8.0; // Number of items visible at once
 const SCROLL_SPEED: f32 = 20.0;
@@ -45,6 +46,7 @@ enum GameState {
     LootScreen,
     Menu,
     EndBattle,
+    GameOver,
 }
 
 #[derive(Component, Clone)]
@@ -242,6 +244,23 @@ struct EnemyHealthText;
 #[derive(Component)]
 struct PlayerHealthText;
 
+#[derive(Component)]
+struct CardAnimationTimer(Timer);
+
+#[derive(Component)]
+struct CardAnimation {
+    start_pos: Vec3,
+    offset: f32,
+    state: CardAnimationState,
+}
+
+#[derive(PartialEq)]
+enum CardAnimationState {
+    Idle,
+    MovingUp,
+    MovingDown,
+}
+
 /// Set up a scene that tests all sprite anchor types.
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Res<GameConfig>) {
     println!("Setting up scene");
@@ -322,6 +341,11 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, game_config: Re
                         random_range(1.0..3.0),
                         TimerMode::Repeating,
                     )),
+                    CardAnimation {
+                        start_pos: transform.translation,
+                        offset: 20.0, // How high the card will bounce
+                        state: CardAnimationState::Idle,
+                    },
                 ))
                 // .observe(select_card_on::<Pointer<Click>>())
                 // .observe(hover_card_on::<Pointer<Over>>())
@@ -408,6 +432,11 @@ fn add_card(
             owner,
             cardeffect,
             CardAttackTimer(Timer::from_seconds(3.0, TimerMode::Repeating)),
+            CardAnimation {
+                start_pos: transform.translation,
+                offset: 20.0, // How high the card will bounce
+                state: CardAnimationState::Idle,
+            },
             BattleEntity,
         ))
         .with_children(|parent| {
@@ -459,7 +488,7 @@ fn spawn_player(image: Handle<Image>, sprite_size: Vec2, screen_height: f32) -> 
         },
         transform: Transform::from_xyz(0.0, -screen_height / 2.0 + sprite_size.y, 0.1)
             .with_scale(Vec3::splat(1.0)),
-        player_health: PlayerHealth(100),
+        player_health: PlayerHealth(0),
         stats: Stats {
             strength: 20,
             agility: 10,
@@ -611,16 +640,70 @@ fn calculate_enemy_effects(
     effects.effects = continued_effects;
 }
 
+fn animate_cards(time: Res<Time>, mut card_query: Query<(&mut Transform, &mut CardAnimation)>) {
+    for (mut transform, mut animation) in card_query.iter_mut() {
+        match animation.state {
+            CardAnimationState::Idle => {
+                // Do nothing when idle
+            }
+            CardAnimationState::MovingUp => {
+                let target_y = animation.start_pos.y + animation.offset;
+                transform.translation.y =
+                    transform.translation.y + (200.0 * time.delta().as_secs_f32());
+                if transform.translation.y >= target_y {
+                    transform.translation.y = target_y;
+                    animation.state = CardAnimationState::MovingDown;
+                }
+            }
+            CardAnimationState::MovingDown => {
+                transform.translation.y =
+                    transform.translation.y - (200.0 * time.delta().as_secs_f32());
+                if transform.translation.y <= animation.start_pos.y {
+                    transform.translation.y = animation.start_pos.y;
+                    animation.state = CardAnimationState::Idle;
+                }
+            }
+        }
+    }
+}
+
 fn enemy_auto_attack(
     time: Res<Time>,
-    mut enemy_cards_query: Query<(&mut CardAttackTimer, &CardEffect), With<EnemyCard>>,
-    mut player_query: Query<(&mut Effects), With<PlayerEntity>>,
+    mut enemy_cards_query: Query<
+        (&mut CardAttackTimer, &CardEffect, &mut CardAnimation),
+        With<EnemyCard>,
+    >,
+    mut effect_queries: ParamSet<(
+        Query<&Effects, With<EnemyEntity>>,
+        Query<&mut Effects, With<PlayerEntity>>,
+    )>,
 ) {
-    for (mut timer, effect) in enemy_cards_query.iter_mut() {
+    // First check if enemy is stunned
+    let is_stunned = {
+        let enemy_effects = effect_queries.p0();
+        let Ok(effects) = enemy_effects.get_single() else {
+            println!("[enemy_auto_attack] No enemy effects found");
+            return;
+        };
+        effects
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ActiveEffect::Stun { duration } if !duration.finished()))
+    };
+
+    if is_stunned {
+        // If stunned, don't tick timers and don't allow attacks
+        return;
+    }
+
+    for (mut timer, effect, mut animation) in enemy_cards_query.iter_mut() {
         timer.0.tick(time.delta());
         if timer.0.finished() {
             println!("attack ready");
-            let Ok((mut effects)) = player_query.get_single_mut() else {
+            animation.state = CardAnimationState::MovingUp;
+
+            let mut player_effects = effect_queries.p1();
+            let Ok(mut effects) = player_effects.get_single_mut() else {
                 println!("[enemy_auto_attack] No player found");
                 return;
             };
@@ -633,7 +716,7 @@ fn enemy_auto_attack(
                 } => {
                     effects.effects.push(ActiveEffect::DamageOverTime {
                         damage: *damage,
-                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                        duration: Timer::from_seconds(*duration, TimerMode::Once),
                         frequency: Timer::from_seconds(*frequency, TimerMode::Repeating),
                     });
                 }
@@ -642,7 +725,7 @@ fn enemy_auto_attack(
                 }
                 CardEffect::Stun { duration } => {
                     effects.effects.push(ActiveEffect::Stun {
-                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                        duration: Timer::from_seconds(*duration, TimerMode::Once),
                     });
                 }
                 CardEffect::Heal(heal) => {
@@ -655,14 +738,40 @@ fn enemy_auto_attack(
 
 fn player_auto_attack(
     time: Res<Time>,
-    mut player_cards_query: Query<(&mut CardAttackTimer, &CardEffect), With<PlayerCard>>,
-    mut enemy_query: Query<(&mut Effects), With<EnemyEntity>>,
+    mut player_cards_query: Query<
+        (&mut CardAttackTimer, &CardEffect, &mut CardAnimation),
+        With<PlayerCard>,
+    >,
+    mut effect_queries: ParamSet<(
+        Query<&Effects, With<PlayerEntity>>,
+        Query<&mut Effects, With<EnemyEntity>>,
+    )>,
 ) {
-    for (mut timer, effect) in player_cards_query.iter_mut() {
+    // First check if player is stunned
+    let is_stunned = {
+        let player_effects = effect_queries.p0();
+        let Ok(effects) = player_effects.get_single() else {
+            println!("[player_auto_attack] No player effects found");
+            return;
+        };
+        effects
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ActiveEffect::Stun { duration } if !duration.finished()))
+    };
+
+    if is_stunned {
+        // If stunned, don't tick timers and don't allow attacks
+        return;
+    }
+
+    for (mut timer, effect, mut animation) in player_cards_query.iter_mut() {
         timer.0.tick(time.delta());
         if timer.0.finished() {
-            // println!("attack ready");
-            let Ok((mut effects)) = enemy_query.get_single_mut() else {
+            animation.state = CardAnimationState::MovingUp;
+
+            let mut enemy_effects = effect_queries.p1();
+            let Ok(mut effects) = enemy_effects.get_single_mut() else {
                 println!("[player_auto_attack] No enemy found");
                 return;
             };
@@ -675,7 +784,7 @@ fn player_auto_attack(
                 } => {
                     effects.effects.push(ActiveEffect::DamageOverTime {
                         damage: *damage,
-                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                        duration: Timer::from_seconds(*duration, TimerMode::Once),
                         frequency: Timer::from_seconds(*frequency, TimerMode::Repeating),
                     });
                 }
@@ -684,7 +793,7 @@ fn player_auto_attack(
                 }
                 CardEffect::Stun { duration } => {
                     effects.effects.push(ActiveEffect::Stun {
-                        duration: Timer::from_seconds(*duration, TimerMode::Repeating),
+                        duration: Timer::from_seconds(*duration, TimerMode::Once),
                     });
                 }
                 CardEffect::Heal(heal) => {
@@ -713,6 +822,26 @@ fn check_enemy_death(
     }
     if alive_enemies == 0 {
         next_state.set(GameState::LootScreen);
+    }
+}
+fn check_player_death(
+    player_query: Query<(Entity, &PlayerHealth)>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut commands: Commands,
+) {
+    let mut alive_players = 0;
+    for (entity, player_health) in player_query.iter() {
+        match player_health.0.cmp(&0) {
+            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                commands.entity(entity).despawn_recursive();
+            }
+            std::cmp::Ordering::Greater => {
+                alive_players += 1;
+            }
+        }
+    }
+    if alive_players == 0 {
+        next_state.set(GameState::GameOver);
     }
 }
 
@@ -952,9 +1081,42 @@ fn update_skill_timer_bars(
     }
 }
 
-fn update_card_timers(mut card_query: Query<&mut CardAttackTimer>, time: Res<Time>) {
-    for mut attack_timer in card_query.iter_mut() {
-        attack_timer.0.tick(time.delta());
+fn update_card_timers(
+    mut card_query: Query<(&mut CardAttackTimer, &Parent)>,
+    player_query: Query<(Entity, &Effects), With<PlayerEntity>>,
+    enemy_query: Query<(Entity, &Effects), With<EnemyEntity>>,
+    time: Res<Time>,
+) {
+    // Get stun status for player and enemy
+    let player_stunned = player_query.iter().any(|(_, effects)| {
+        effects
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ActiveEffect::Stun { duration } if !duration.finished()))
+    });
+
+    let enemy_stunned = enemy_query.iter().any(|(_, effects)| {
+        effects
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, ActiveEffect::Stun { duration } if !duration.finished()))
+    });
+
+    for (mut attack_timer, parent) in card_query.iter_mut() {
+        let parent_entity = parent.get();
+
+        // Check if the card belongs to a stunned entity
+        let is_stunned = if player_query.get(parent_entity).is_ok() {
+            player_stunned
+        } else if enemy_query.get(parent_entity).is_ok() {
+            enemy_stunned
+        } else {
+            false
+        };
+
+        if !is_stunned {
+            attack_timer.0.tick(time.delta());
+        }
     }
 }
 
@@ -1010,6 +1172,138 @@ fn handle_inventory_scroll(
     }
 }
 
+#[derive(Component)]
+struct StunIndicator;
+
+fn update_stun_indicators(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    effect_query: Query<
+        (Entity, &Effects, Option<&Children>),
+        Or<(With<PlayerEntity>, With<EnemyEntity>)>,
+    >,
+    stun_indicators: Query<Entity, With<StunIndicator>>,
+) {
+    for (entity, effects, children) in effect_query.iter() {
+        let is_stunned = effects.effects.iter().any(
+            |effect| matches!(effect, ActiveEffect::Stun { duration } if !duration.finished()),
+        );
+
+        // Check if entity already has a stun indicator
+        let has_indicator = children
+            .map(|children| {
+                children
+                    .iter()
+                    .any(|child| stun_indicators.contains(*child))
+            })
+            .unwrap_or(false);
+
+        if is_stunned && !has_indicator {
+            // Add stun indicator
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Name::new("Stun Indicator"),
+                    Sprite {
+                        image: asset_server.load("stun.png"),
+                        custom_size: Some(Vec2::new(32.0, 32.0)),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, 50.0, 0.2), // Position above the entity
+                    StunIndicator,
+                ));
+            });
+        } else if !is_stunned && has_indicator {
+            // Remove stun indicator
+            if let Some(children) = children {
+                for child in children.iter() {
+                    if stun_indicators.contains(*child) {
+                        commands.entity(*child).despawn_recursive();
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn show_game_over(mut commands: Commands, game_config: Res<GameConfig>) {
+    // show end game screen covering whole screen
+    commands
+        .spawn((
+            Name::new("Game Over Screen"),
+            Sprite {
+                color: Color::srgba(0.3, 0.2, 0.0, 1.0),
+                custom_size: Some(Vec2::new(
+                    game_config.screen_width,
+                    game_config.screen_height,
+                )),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER),
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    Sprite {
+                        color: Color::srgb(0.3, 0.2, 0.8),
+                        custom_size: Some(Vec2::new(100.0, 100.0)),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.1),
+                ))
+                .observe(recolor_on::<Pointer<Over>>(Color::srgb(0.8, 0.8, 0.8)))
+                .observe(recolor_on::<Pointer<Out>>(Color::srgb(0.3, 0.2, 0.8)))
+                .observe(respawn_on::<Pointer<Down>>(Vec2::new(10.0, -10.0)))
+                .observe(respawn_on::<Pointer<Up>>(Vec2::new(-10.0, 10.0)));
+
+            parent.spawn((
+                Text2d::new("New run"),
+                TextColor(Color::WHITE),
+                Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.2),
+            ));
+        });
+    // .with_children(|parent| {
+    //     parent.spawn((
+    //         Text2d::new("Game Over"),
+    //         TextColor(Color::WHITE),
+    //         Transform::from_xyz(0.0, 0.0, MENU_Z_LAYER + 0.1),
+    //     ));
+
+    //     parent
+    //         .spawn((
+    //             Name::new("Game Over Text"),
+    //             Text2d::new("New run"),
+    //             TextColor(Color::WHITE),
+    //             Transform::from_xyz(0.0, -30.0, MENU_Z_LAYER + 0.2),
+    //         ))
+    //         .observe(recolor_on::<Pointer<Over>>(Color::srgb(0.8, 0.8, 0.8)))
+    //         .observe(recolor_on::<Pointer<Out>>(Color::srgb(0.3, 0.2, 0.8)));
+    //     // .observe(respawn_on::<Pointer<Click>>());
+    // });
+}
+
+fn respawn_on<E: Debug + Clone + Reflect>(
+    direction: Vec2,
+) -> impl Fn(Trigger<E>, (Query<&mut Transform>)) {
+    // println!("respawn_on");
+    move |ev, mut transforms| {
+        let Ok(mut transform) = transforms.get_mut(ev.entity()) else {
+            return;
+        };
+        transform.translation += Vec3::new(direction.x, direction.y, 0.0);
+        // println!("respawn_on end");
+    }
+}
+
+fn recolor_on<E: Debug + Clone + Reflect>(
+    color: Color,
+) -> impl Fn(Trigger<E>, (Query<&mut Sprite>)) {
+    move |ev, mut sprites| {
+        let Ok(mut sprite) = sprites.get_mut(ev.entity()) else {
+            return;
+        };
+        sprite.color = color;
+    }
+}
 fn main() {
     App::new()
         .add_plugins((
@@ -1042,9 +1336,10 @@ fn main() {
                 player_auto_attack,
                 calculate_player_effects,
                 calculate_enemy_effects,
-                // enemy_skill_auto_attack,
+                animate_cards,
                 check_enemy_death,
-                // handle_inventory_button,
+                check_player_death,
+                update_stun_indicators,
             )
                 .chain()
                 .run_if(in_state(GameState::Battle)),
@@ -1063,6 +1358,7 @@ fn main() {
             Update,
             handle_inventory_scroll.run_if(in_state(GameState::Menu)),
         )
+        .add_systems(OnEnter(GameState::GameOver), show_game_over)
         .insert_resource(GameConfig {
             screen_width: 640.0,
             screen_height: 480.0,
